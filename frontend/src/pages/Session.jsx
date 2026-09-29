@@ -4,6 +4,8 @@ import { useCamera }    from "../hooks/useCamera";
 import ScoreHUD         from "../components/ScoreHUD";
 import KeyframeFlash    from "../components/KeyframeFlash";
 import SkeletonCanvas   from "../components/SkeletonCanvas";
+import CoachCue         from "../components/CoachCue";
+import FreezeMeter      from "../components/FreezeMeter";
 
 export default function Session({ sessionId, onEnd }) {
   const [landmarks,   setLandmarks]   = useState([]);
@@ -19,7 +21,11 @@ export default function Session({ sessionId, onEnd }) {
   const [debugMode,   setDebugMode]   = useState(false);
   const [latencyMs,   setLatencyMs]   = useState(null);
   const [wsReady,     setWsReady]     = useState(false);
-  const [imu, setImu] = useState(null);
+  const [imu,         setImu]         = useState(null);
+  const [coachCue,    setCoachCue]    = useState(null);
+  const [freezeLive,  setFreezeLive]  = useState(null);
+  const [freezeDone,  setFreezeDone]  = useState(null);
+  const [freezeDebug, setFreezeDebug] = useState(null);
 
   const handleEnd = async () => {
     await fetch(`http://localhost:8000/session/${sessionId}`, { method: "DELETE" });
@@ -27,7 +33,14 @@ export default function Session({ sessionId, onEnd }) {
   };
 
   const handleMessage = useCallback((msg) => {
+    if (msg.type === "coach_cue") { setCoachCue(msg.cue); return; }
     if (msg.type !== "frame") return;
+    if (msg.freeze) {
+      setFreezeLive(msg.freeze.live);
+      setFreezeDebug(msg.freeze);
+      // new object each time so the result card re-triggers for back-to-back freezes
+      if (msg.freeze.result) setFreezeDone({ ...msg.freeze.result });
+    }
     if (msg._rttMs !== undefined)       setLatencyMs(msg._rttMs);
     if (msg.imu) setImu(msg.imu);
     if (msg.landmarks)                  setLandmarks(msg.landmarks);
@@ -167,6 +180,12 @@ export default function Session({ sessionId, onEnd }) {
                 {" · "}LEG {imu?.leg_ok ? "OK" : "--"}
                 {" · "}OFFSET {imu?.offset_ms ?? "--"} MS
               </div>
+              <div>
+                POSTURE {(freezeDebug?.posture ?? "--").toUpperCase()}
+                {" · "}{freezeDebug?.holding ? "HOLDING" : "MOVING"}
+                {" · "}FREEZES {freezeDebug?.count ?? 0}
+                {" · "}VETOED {freezeDebug?.vetoed ?? 0}
+              </div>
             </div>
           ) : (
             <SkeletonCanvas
@@ -183,6 +202,9 @@ export default function Session({ sessionId, onEnd }) {
           {scoreResult && (
             <KeyframeFlash result={scoreResult} onDone={() => setScoreResult(null)} />
           )}
+
+          <FreezeMeter live={freezeLive} result={freezeDone} />
+          <CoachCue cue={coachCue} />
         </div>
 
         {/* ── sidebar ── */}

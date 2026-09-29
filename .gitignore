@@ -221,5 +221,6 @@ __marimo__/
 
 
 #Notes
-NOTES.mdbackend/voices-v1.0.bin
+NOTES.md
+backend/voices-v1.0.bin
 backend/kokoro-v1.0.onnx

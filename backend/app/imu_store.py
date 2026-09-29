@@ -61,6 +61,11 @@ class ImuStore:
         best = min(candidates, key=lambda s: abs(s.host_time - t))
         return best if abs(best.host_time - t) <= max_gap else None
 
+    def since(self, t: float) -> list[TimedImuSample]:
+        """All samples strictly newer than t, oldest first."""
+        with self._lock:
+            return [s for s in self._samples if s.host_time > t]
+
     def window(self, t0: float, t1: float) -> list[TimedImuSample]:
         """All samples with t0 <= host_time <= t1, oldest first."""
         with self._lock:
