@@ -15,7 +15,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -33,6 +33,7 @@ from app.voice import VoiceCoach
 from app.imu_protocol import PacketError, unpack_forwarded
 from app.imu_store import ImuStore
 from app.freeze_monitor import FreezeMonitor
+from app.move_catalog import load_catalog, preview as move_preview
 
 app = FastAPI(title="Breakdance Coach API")
 app.add_middleware(
@@ -78,6 +79,7 @@ GHOST_BONES = [
 class SessionConfig(BaseModel):
     voice_gender: str = "female"
     zoom: float       = 1.0
+    move_id: Optional[str] = None   # practice one move; None compares against all
 
 
 def _diagnose_visibility(pose_frame) -> Optional[str]:
@@ -114,7 +116,7 @@ class CoachingSession:
     def __init__(self, config: SessionConfig) -> None:
         self.estimator      = PoseEstimator(model_complexity=1)
         self.buf            = PoseBuffer()
-        self.engine         = DTWEngine(REFERENCE_DIR)
+        self.engine         = DTWEngine(REFERENCE_DIR, only_move=config.move_id)
         self.scorer         = Scorer(REFERENCE_DIR)
         self.ai_coach       = AICoach()
         self.voice          = VoiceCoach(gender=config.voice_gender)
@@ -267,13 +269,6 @@ class CoachingSession:
         self.engine.shutdown()
 
 
-def _infer_difficulty(stem: str) -> str:
-    s = stem.lower()
-    if any(x in s for x in ["toprock", "basic", "_00", "_01"]): return "Beginner"
-    if any(x in s for x in ["footwork", "freeze", "_02", "_03", "_04"]): return "Intermediate"
-    return "Advanced"
-
-
 @app.get("/health")
 async def health():
     return {"status": "ok", "moves": len(list(REFERENCE_DIR.glob("*.npy")))}
@@ -281,21 +276,15 @@ async def health():
 
 @app.get("/moves")
 async def list_moves():
-    moves = []
-    for npy in sorted(REFERENCE_DIR.glob("*.npy")):
-        meta_path = REFERENCE_DIR / f"{npy.stem}_meta.json"
-        meta = {}
-        if meta_path.exists():
-            with meta_path.open() as f:
-                meta = json.load(f)
-        moves.append({
-            "id":         npy.stem,
-            "name":       meta.get("name", npy.stem).replace("_", " ").upper(),
-            "source":     meta.get("source", "custom"),
-            "difficulty": _infer_difficulty(npy.stem),
-            "original":   meta.get("original_file", ""),
-        })
-    return {"moves": moves}
+    return {"moves": [m.to_dict() for m in load_catalog(REFERENCE_DIR)]}
+
+
+@app.get("/moves/{move_id}/preview")
+async def get_move_preview(move_id: str):
+    data = move_preview(REFERENCE_DIR, move_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"No move named {move_id}")
+    return data
 
 
 @app.post("/session/start")

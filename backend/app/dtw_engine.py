@@ -196,11 +196,18 @@ class DTWEngine:
         *,
         window_len: int = DEFAULT_WINDOW_LEN,
         executor: Optional[ThreadPoolExecutor] = None,
+        only_move: Optional[str] = None,
     ):
         self.reference_dir = Path(reference_dir)
         self.window_len = window_len
         self._executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="dtw")
         self._library: list[ReferenceMove] = load_reference_library(self.reference_dir)
+        # Practicing one move: compare only against it. Unknown ids fall back
+        # to the full library instead of leaving nothing to compare against.
+        if only_move:
+            chosen = [m for m in self._library if m.name == only_move]
+            if chosen:
+                self._library = chosen
         self._last_result: Optional[DTWResult] = None
 
     @property

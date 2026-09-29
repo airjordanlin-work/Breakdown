@@ -109,3 +109,11 @@ def test_engine_async_returns_future(tmp_path):
     result = future.result(timeout=5)
     assert isinstance(result, DTWResult)
     engine.shutdown()
+
+def test_engine_can_practice_a_single_move(tmp_path):
+    for name in ("a", "b"):
+        np.save(tmp_path / f"{name}.npy", np.zeros((60, 99), dtype=np.float32))
+    only = DTWEngine(tmp_path, only_move="b")
+    assert [m.name for m in only.library] == ["b"]
+    fallback = DTWEngine(tmp_path, only_move="nope")
+    assert len(fallback.library) == 2
