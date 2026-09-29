@@ -14,11 +14,11 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from backend.app import overlay
-from app.buffer import PoseBuffer, WINDOW_LEN
+from backend.app.buffer import PoseBuffer, WINDOW_LEN
 from backend.app.dtw_engine import DTWEngine
-from app.pose_estimator import PoseEstimator, is_pose_reliable
-from app.scorer import Scorer, _load_keyframes, _reference_frame_index, _match_keyframe
-from app.voice import VoiceCoach
+from backend.app.pose_estimator import PoseEstimator, is_pose_reliable
+from backend.app.scorer import Scorer
+from backend.app.voice import VoiceCoach
 
 DTW_EVERY_N_FRAMES = 3
 KEYFRAME_FLASH_FRAMES = 30
@@ -153,8 +153,8 @@ def run_loop(args: argparse.Namespace) -> None:
             if frame_idx % 30 == 0:
                 print(f"[frame {frame_idx}] buffer: {len(buf)}/60 | has_ref: {engine.has_reference} | future: {future is not None} | zoom: {args.zoom:.1f}")
 
-            if buf.is_ready() and future is None:
-                window = [f.landmarks for f in buf._frames]
+            if buf.is_ready() and future is None and frame_idx % DTW_EVERY_N_FRAMES == 0:
+                window = list(buf.get_sequence())
                 future = engine.compare_async(window)
                 print(f"DTW fired on frame {frame_idx}")
 
@@ -183,11 +183,7 @@ def run_loop(args: argparse.Namespace) -> None:
                             if voice:
                                 voice.feedback_from_score(new_score)
                         else:
-                            kf       = _load_keyframes(scorer.reference_dir, dtw_result.move_name)
-                            live_idx = max(dtw_result.live_frames - 1, 0)
-                            ref_idx  = _reference_frame_index(dtw_result, live_idx)
-                            matched  = _match_keyframe(kf, ref_idx)
-                            print(f"Keyframes loaded: {len(kf)} | Live: {live_idx} | Ref: {ref_idx} | Matched: {matched}")
+                            print(f"No score — {scorer.explain_no_score(dtw_result)}")
 
             fill_ratio = len(buf) / WINDOW_LEN
             move_name  = dtw_result.move_name if dtw_result else engine.move_name

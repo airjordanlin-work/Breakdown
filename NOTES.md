@@ -13,3 +13,6 @@ Backend sends ~2KB JSON per frame instead of ~50KB JPEG — roughly 25x less dat
 Frontend owns the rendering — smoother, no compression artifacts
 Ghost skeleton is now drawn in React canvas space so it's perfectly crisp
 Guidance is now joint-specific instead of just "step back"
+
+##JUN 1
+working on real time AI coaching.  Synced up with Claude AI, created coach.py to specify the prompts.  In the future want to integrate a sprite of a breaker for visual representation.  Additionally AIST++ is not for isolated moves and to extract each individual move manually would take to much effort thus we are getting rid of this and instead integrating youtube videos as it is more clear cut. 

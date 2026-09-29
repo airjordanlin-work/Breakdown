@@ -1,16 +1,19 @@
 """
-FastAPI backend — sends landmark JSON instead of annotated JPEG frames.
-Much faster (2KB vs 50KB per frame) and enables skeleton-only frontend.
+FastAPI backend — WebSocket streaming with real-time AI coaching.
 """
 
 from __future__ import annotations
 
-import base64, json, uuid
+import asyncio
+import base64
+import json
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
-import cv2, numpy as np
+import cv2
+import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -24,6 +27,8 @@ from app.pose_estimator import PoseEstimator, is_pose_reliable
 from app.buffer import PoseBuffer, WINDOW_LEN
 from app.dtw_engine import DTWEngine
 from app.scorer import Scorer
+from app.coach import AICoach
+from app.voice import VoiceCoach
 
 app = FastAPI(title="Breakdance Coach API")
 app.add_middleware(
@@ -39,15 +44,12 @@ KEYFRAME_FLASH = 30
 _sessions: dict[str, "CoachingSession"] = {}
 _executor      = ThreadPoolExecutor(max_workers=4)
 
-# MediaPipe body connections for frontend skeleton renderer
 BODY_CONNECTIONS = [
-    [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
-    [11, 23], [12, 24], [23, 24],
-    [23, 25], [25, 27], [24, 26], [26, 28],
-    [27, 31], [28, 32],
+    [11,12],[11,13],[13,15],[12,14],[14,16],
+    [11,23],[12,24],[23,24],
+    [23,25],[25,27],[24,26],[26,28],
 ]
 
-# T-pose ghost in body space — same as overlay.py
 GHOST_BONES = [
     [0.00,-1.80, 0.00,-1.50],
     [-0.50,-1.45, 0.50,-1.45],
@@ -71,44 +73,41 @@ class SessionConfig(BaseModel):
 
 
 def _diagnose_visibility(pose_frame) -> Optional[str]:
-    """Return a specific guidance string based on which joints are missing."""
-    vis = pose_frame.visibility
+    vis          = pose_frame.visibility
     hips_ok      = vis[23] >= 0.4 and vis[24] >= 0.4
     shoulders_ok = vis[11] >= 0.4 and vis[12] >= 0.4
     feet_ok      = vis[27] >= 0.4 and vis[28] >= 0.4
-    hands_ok     = vis[15] >= 0.4 and vis[16] >= 0.4
 
     if not hips_ok and not shoulders_ok:
         return "Too close — step back until full body is visible"
     if not hips_ok:
         return "Step back — hips not in frame"
-    if not feet_ok and not hands_ok:
-        return "Step back more — hands and feet not visible"
     if not feet_ok:
         return "Step back — feet not in frame"
-    if not hands_ok:
-        return "Raise camera or step back — hands not visible"
     return None
 
 
 class CoachingSession:
     def __init__(self, config: SessionConfig) -> None:
-        self.estimator     = PoseEstimator(model_complexity=1)  # bumped to 1 for better unusual poses
-        self.buf           = PoseBuffer()
-        self.engine        = DTWEngine(REFERENCE_DIR)
-        self.scorer        = Scorer(REFERENCE_DIR)
-        self.future        = None
-        self.flash_counter = 0
-        self.score_result  = None
-        self.dtw_result    = None
-        self.pose_frame    = None
-        self.frame_idx     = 0
-        self.config        = config
+        self.estimator      = PoseEstimator(model_complexity=1)
+        self.buf            = PoseBuffer()
+        self.engine         = DTWEngine(REFERENCE_DIR)
+        self.scorer         = Scorer(REFERENCE_DIR)
+        self.ai_coach       = AICoach()
+        self.voice          = VoiceCoach(gender=config.voice_gender)
+        self.future         = None
+        self.flash_counter  = 0
+        self.score_result   = None
+        self.dtw_result     = None
+        self.pose_frame     = None
+        self.frame_idx      = 0
+        self.pending_cue: Optional[asyncio.Task] = None
 
         dummy = np.zeros((480, 640, 3), dtype=np.uint8)
         self.estimator.process(dummy)
 
-    def process_frame(self, b64: str) -> dict:
+    def process_frame_sync(self, b64: str) -> dict:
+        """Synchronous frame processing — runs in thread pool."""
         data  = base64.b64decode(b64)
         arr   = np.frombuffer(data, np.uint8)
         bgr   = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -116,18 +115,15 @@ class CoachingSession:
         rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pose  = self.estimator.process(rgb, keep_raw=True)
 
-        body_visible = pose is not None and is_pose_reliable(pose)
-        guidance     = None
-
-        if body_visible:
+        guidance = None
+        if pose is not None and is_pose_reliable(pose):
             self.pose_frame = pose
             self.buf.add(pose)
             guidance = _diagnose_visibility(pose)
         else:
+            guidance = "No body detected — step into frame"
             if pose is not None:
                 guidance = _diagnose_visibility(pose)
-            else:
-                guidance = "No body detected — step into frame"
 
         if self.buf.is_ready() and self.future is None:
             window      = [f.landmarks for f in self.buf._frames]
@@ -155,19 +151,15 @@ class CoachingSession:
         stats      = self.scorer.stats()
         self.frame_idx += 1
 
-        # build landmark payload for frontend skeleton renderer
         landmarks  = []
         visibility = []
         hip_cx = hip_cy = scale = None
 
         if self.pose_frame is not None and self.pose_frame.raw_landmarks is not None:
-            raw = self.pose_frame.raw_landmarks   # (33, 3) image space 0-1
+            raw = self.pose_frame.raw_landmarks
             vis = self.pose_frame.visibility
-
             landmarks  = raw.tolist()
             visibility = vis.tolist()
-
-            # compute anchor for ghost skeleton
             lh, rh = raw[23], raw[24]
             ls, rs = raw[11], raw[12]
             if all(vis[i] >= 0.4 for i in [11, 12, 23, 24]):
@@ -175,29 +167,9 @@ class CoachingSession:
                 hip_cy = float((lh[1] + rh[1]) / 2)
                 scale  = float(abs(rs[0] - ls[0]) * 0.9)
 
-        return {
-            "type":        "frame",
-            "landmarks":   landmarks,
-            "visibility":  visibility,
-            "ghost_bones": GHOST_BONES if fill_ratio >= 1.0 else [],
-            "ghost_anchor": {
-                "hip_cx": hip_cx,
-                "hip_cy": hip_cy,
-                "scale":  scale,
-            } if hip_cx is not None else None,
-            "aligned":     bool(self.dtw_result.aligned) if self.dtw_result else False,
-            "fill_ratio":  round(fill_ratio, 3),
-            "move_name":   move_name or "",
-            "guidance":    guidance,
-            "stats": {
-                "total_points": round(stats.total_points),
-                "grade":        stats.grade,
-                "streak":       stats.streak,
-                "perfects":     stats.perfects,
-                "closes":       stats.closes,
-                "misses":       stats.misses,
-            },
-            "score_result": {
+        score_payload = None
+        if self.score_result and self.flash_counter > 0:
+            score_payload = {
                 "points":  round(self.score_result.points_this_attempt),
                 "results": [
                     {
@@ -208,8 +180,44 @@ class CoachingSession:
                     }
                     for r in self.score_result.results
                 ],
-            } if self.score_result and self.flash_counter > 0 else None,
+            }
+
+        return {
+            "type":         "frame",
+            "landmarks":    landmarks,
+            "visibility":   visibility,
+            "ghost_bones":  GHOST_BONES if fill_ratio >= 1.0 else [],
+            "ghost_anchor": {
+                "hip_cx": hip_cx,
+                "hip_cy": hip_cy,
+                "scale":  scale,
+            } if hip_cx is not None else None,
+            "aligned":      bool(self.dtw_result.aligned) if self.dtw_result else False,
+            "fill_ratio":   round(fill_ratio, 3),
+            "move_name":    move_name or "",
+            "guidance":     guidance,
+            "stats": {
+                "total_points": round(stats.total_points),
+                "grade":        stats.grade,
+                "streak":       stats.streak,
+                "perfects":     stats.perfects,
+                "closes":       stats.closes,
+                "misses":       stats.misses,
+            },
+            "score_result": score_payload,
+            # snapshot for AI coach — passed separately in ws handler
+            "_coach_context": {
+                "move_name":    move_name or "",
+                "aligned":      bool(self.dtw_result.aligned) if self.dtw_result else False,
+                "fill_ratio":   round(fill_ratio, 3),
+                "score_result": score_payload,
+            },
         }
+
+    def speak(self, cue: str) -> None:
+        """Speak a cue through Kokoro TTS."""
+        if self.voice and cue:
+            self.voice.speak(cue)
 
     def close(self) -> None:
         self.estimator.close()
@@ -254,6 +262,14 @@ async def start_session(config: SessionConfig):
     return {"session_id": sid}
 
 
+@app.delete("/session/{session_id}")
+async def end_session(session_id: str):
+    if session_id in _sessions:
+        _sessions[session_id].close()
+        del _sessions[session_id]
+    return {"status": "closed"}
+
+
 @app.websocket("/ws/{session_id}")
 async def ws_endpoint(websocket: WebSocket, session_id: str):
     await websocket.accept()
@@ -263,34 +279,57 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
         await websocket.close()
         return
 
-    import asyncio
     loop = asyncio.get_event_loop()
 
     try:
         while True:
             raw = await websocket.receive_text()
             msg = json.loads(raw)
+
             if msg.get("type") == "frame":
+                # run pose pipeline in thread pool
                 payload = await loop.run_in_executor(
-                    _executor, session.process_frame, msg["data"]
+                    _executor, session.process_frame_sync, msg["data"]
                 )
+
+                # extract coach context then remove from payload
+                coach_ctx = payload.pop("_coach_context", {})
+
+                # send frame data to frontend immediately
                 await websocket.send_text(json.dumps(payload))
+
+                # fire AI coach if cooldown allows — non-blocking
+                if session.ai_coach.should_fire():
+                    async def _fire_cue(ctx=coach_ctx):
+                        cue = await session.ai_coach.get_cue(
+                            move_name    = ctx.get("move_name", ""),
+                            aligned=coach_ctx.get("aligned", False),
+                            fill_ratio=coach_ctx.get("fill_ratio", 0),
+                            score_result = ctx.get("score_result"),
+                        )
+                        if cue:
+                            # speak through Kokoro
+                            session.speak(cue)
+                            # also send to frontend for display
+                            try:
+                                await websocket.send_text(json.dumps({
+                                    "type": "coach_cue",
+                                    "cue":  cue,
+                                }))
+                            except Exception:
+                                pass
+
+                    asyncio.create_task(_fire_cue())
+
             elif msg.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
+
     except WebSocketDisconnect:
         pass
     finally:
-        pass
-        # if session_id in _sessions:
-        #     _sessions[session_id].close()
-        #     del _sessions[session_id]
+        pass  # session kept alive for reconnection
 
-    @app.delete("/session/{session_id}")
-    async def end_session(session_id: str):
-        if session_id in _sessions:
-            _sessions[session_id].close()
-            del _sessions[session_id]
-        return {"status": "closed"}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
