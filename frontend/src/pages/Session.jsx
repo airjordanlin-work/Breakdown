@@ -4,6 +4,7 @@ import { useCamera }    from "../hooks/useCamera";
 import ScoreHUD         from "../components/ScoreHUD";
 import KeyframeFlash    from "../components/KeyframeFlash";
 import SkeletonCanvas   from "../components/SkeletonCanvas";
+import CoachCue from "../components/CoachCue";
 
 export default function Session({ sessionId, onEnd }) {
   const [landmarks,   setLandmarks]   = useState([]);
@@ -19,6 +20,7 @@ export default function Session({ sessionId, onEnd }) {
   const [debugMode,   setDebugMode]   = useState(false);
   const [cameraFrame, setCameraFrame] = useState(null);
   const [wsReady,     setWsReady]     = useState(false);
+  const [coachCue, setCoachCue] = useState("");
 
   const handleEnd = async () => {
     await fetch(`http://localhost:8000/session/${sessionId}`, { method: "DELETE" });
@@ -37,6 +39,10 @@ export default function Session({ sessionId, onEnd }) {
     if (msg.guidance    !== undefined)  setGuidance(msg.guidance);
     if (msg.stats)                      setStats(msg.stats);
     if (msg.score_result)               setScoreResult(msg.score_result);
+    if (msg.type === "coach_cue") {
+      setCoachCue(msg.cue);
+      return;
+    }
   }, []);
 
   const onWsOpen  = useCallback(() => setWsReady(true), []);
@@ -169,6 +175,7 @@ export default function Session({ sessionId, onEnd }) {
           {scoreResult && (
             <KeyframeFlash result={scoreResult} onDone={() => setScoreResult(null)} />
           )}
+          <CoachCue cue={coachCue} />
         </div>
 
         {/* ── sidebar ── */}
