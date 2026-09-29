@@ -19,6 +19,7 @@ export default function Session({ sessionId, onEnd }) {
   const [debugMode,   setDebugMode]   = useState(false);
   const [latencyMs,   setLatencyMs]   = useState(null);
   const [wsReady,     setWsReady]     = useState(false);
+  const [imu, setImu] = useState(null);
 
   const handleEnd = async () => {
     await fetch(`http://localhost:8000/session/${sessionId}`, { method: "DELETE" });
@@ -28,6 +29,7 @@ export default function Session({ sessionId, onEnd }) {
   const handleMessage = useCallback((msg) => {
     if (msg.type !== "frame") return;
     if (msg._rttMs !== undefined)       setLatencyMs(msg._rttMs);
+    if (msg.imu) setImu(msg.imu);
     if (msg.landmarks)                  setLandmarks(msg.landmarks);
     if (msg.visibility)                 setVisibility(msg.visibility);
     if (msg.ghost_bones)                setGhostBones(msg.ghost_bones);
@@ -158,7 +160,13 @@ export default function Session({ sessionId, onEnd }) {
           ) : debugMode ? (
             <div style={{ position:"absolute", top:12, left:12, zIndex:2,
               fontSize:10, letterSpacing:"0.2em", color:"#ff2d2d" }}>
-              ROUND TRIP {latencyMs ?? "--"} MS
+              <div>ROUND TRIP {latencyMs ?? "--"} MS</div>
+              <div>
+                IMU {imu?.connected ? `${imu.rate_hz}HZ` : "OFF"}
+                {" · "}WRIST {imu?.wrist_ok ? "OK" : "--"}
+                {" · "}LEG {imu?.leg_ok ? "OK" : "--"}
+                {" · "}OFFSET {imu?.offset_ms ?? "--"} MS
+              </div>
             </div>
           ) : (
             <SkeletonCanvas

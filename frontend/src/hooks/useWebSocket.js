@@ -48,7 +48,9 @@ export function useWebSocket(sessionId, onMessage, onOpen) {
     if (!canSend()) return false;
     inFlight.current = true;
     sentAt.current   = performance.now();
-    ws.current.send(JSON.stringify({ type: "frame", data: b64 }));
+    // t = capture time in seconds on the laptop clock. The IMU bridge stamps
+    // packets with the same clock, so the backend can line the two up.
+    ws.current.send(JSON.stringify({ type: "frame", data: b64, t: Date.now() / 1000 }));
     return true;
   }, [canSend]);
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -29,6 +30,8 @@ from app.dtw_engine import DTWEngine
 from app.scorer import Scorer
 from app.coach import AICoach
 from app.voice import VoiceCoach
+from app.imu_protocol import PacketError, unpack_forwarded
+from app.imu_store import ImuStore
 
 app = FastAPI(title="Breakdance Coach API")
 app.add_middleware(
@@ -43,6 +46,10 @@ REFERENCE_DIR  = Path(__file__).resolve().parent.parent / "reference_moves"
 KEYFRAME_FLASH = 30
 _sessions: dict[str, "CoachingSession"] = {}
 _executor      = ThreadPoolExecutor(max_workers=4)
+
+# One shared IMU store for the whole server: there's one physical device.
+# The /ws/imu endpoint writes into it; frame processing reads from it.
+_imu_store     = ImuStore()
 
 BODY_CONNECTIONS = [
     [11,12],[11,13],[13,15],[12,14],[14,16],
@@ -87,6 +94,21 @@ def _diagnose_visibility(pose_frame) -> Optional[str]:
     return None
 
 
+def _imu_payload(captured_at: float) -> dict:
+    """IMU health plus how closely an IMU sample lines up with this frame.
+
+    offset_ms is the gap between the frame's capture time and the nearest IMU
+    sample. Small values (under ~20ms at 50Hz) mean the two streams are in sync.
+    None means no IMU sample was close enough to trust.
+    """
+    status = _imu_store.status()
+    nearest = _imu_store.nearest(captured_at)
+    status["offset_ms"] = (
+        round((nearest.host_time - captured_at) * 1000, 1) if nearest else None
+    )
+    return status
+
+
 class CoachingSession:
     def __init__(self, config: SessionConfig) -> None:
         self.estimator      = PoseEstimator(model_complexity=1)
@@ -101,13 +123,22 @@ class CoachingSession:
         self.dtw_result     = None
         self.pose_frame     = None
         self.frame_idx      = 0
+        self.last_captured_at: Optional[float] = None
         self.pending_cue: Optional[asyncio.Task] = None
 
         dummy = np.zeros((480, 640, 3), dtype=np.uint8)
         self.estimator.process(dummy)
 
-    def process_frame_sync(self, b64: str) -> dict:
-        """Synchronous frame processing — runs in thread pool."""
+    def process_frame_sync(self, b64: str, captured_at: Optional[float] = None) -> dict:
+        """Synchronous frame processing — runs in thread pool.
+
+        captured_at is the laptop time (seconds) when the browser grabbed the
+        frame. It uses the same clock as the IMU bridge, so the two streams can
+        be lined up. Falls back to arrival time for older frontends.
+        """
+        captured_at = captured_at if captured_at is not None else time.time()
+        self.last_captured_at = captured_at
+
         data  = base64.b64decode(b64)
         arr   = np.frombuffer(data, np.uint8)
         bgr   = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -205,6 +236,7 @@ class CoachingSession:
                 "misses":       stats.misses,
             },
             "score_result": score_payload,
+            "imu":          _imu_payload(captured_at),
             # snapshot for AI coach — passed separately in ws handler
             "_coach_context": {
                 "move_name":    move_name or "",
@@ -270,6 +302,27 @@ async def end_session(session_id: str):
     return {"status": "closed"}
 
 
+@app.get("/imu/status")
+async def imu_status():
+    return _imu_store.status()
+
+
+@app.websocket("/ws/imu")
+async def imu_endpoint(websocket: WebSocket):
+    """Receives forwarded IMU packets from scripts/imu_bridge.py."""
+    await websocket.accept()
+    try:
+        while True:
+            message = await websocket.receive_bytes()
+            try:
+                host_time, packet = unpack_forwarded(message)
+            except PacketError:
+                continue  # skip a malformed message instead of dropping the connection
+            _imu_store.add(host_time, packet)
+    except WebSocketDisconnect:
+        pass
+
+
 @app.websocket("/ws/{session_id}")
 async def ws_endpoint(websocket: WebSocket, session_id: str):
     await websocket.accept()
@@ -279,7 +332,7 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
         await websocket.close()
         return
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     try:
         while True:
@@ -289,7 +342,7 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
             if msg.get("type") == "frame":
                 # run pose pipeline in thread pool
                 payload = await loop.run_in_executor(
-                    _executor, session.process_frame_sync, msg["data"]
+                    _executor, session.process_frame_sync, msg["data"], msg.get("t")
                 )
 
                 # extract coach context then remove from payload
@@ -303,8 +356,8 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                     async def _fire_cue(ctx=coach_ctx):
                         cue = await session.ai_coach.get_cue(
                             move_name    = ctx.get("move_name", ""),
-                            aligned=coach_ctx.get("aligned", False),
-                            fill_ratio=coach_ctx.get("fill_ratio", 0),
+                            aligned      = ctx.get("aligned", False),
+                            fill_ratio   = ctx.get("fill_ratio", 0),
                             score_result = ctx.get("score_result"),
                         )
                         if cue:

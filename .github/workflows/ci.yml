@@ -9,16 +9,20 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Single-entry matrix: keeps the check name "test (3.12)" so branch
+    # protection doesn't need changing. requirements.txt is a pip freeze
+    # lockfile generated on 3.12, so CI must use 3.12.
+    strategy:
+      matrix:
+        python-version: ["3.12"]
 
     steps:
       - uses: actions/checkout@v4
 
-      # Match the Python version used locally. requirements.txt is a pinned
-      # lockfile generated with pip freeze on 3.12, so CI must use 3.12 too.
-      - name: Set up Python 3.12
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
 
       - name: Install dependencies

@@ -5,6 +5,7 @@ Run from the backend folder with the venv active:
     python scripts/imu_bridge.py                     # live stats
     python scripts/imu_bridge.py --show              # stats + sensor values
     python scripts/imu_bridge.py --record 30         # save 30s to recordings/
+    python scripts/imu_bridge.py --forward           # also send data to the backend
 
 The backend never talks Bluetooth directly. This script owns the messy parts
 (scanning, connecting, reconnecting, macOS permissions) and later forwards
@@ -21,6 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import websockets
 from bleak import BleakClient, BleakScanner
 from bleak.exc import BleakError
 
@@ -36,9 +38,11 @@ from app.imu_protocol import (  # noqa: E402
     ImuPacket,
     PacketError,
     decode_packet,
+    pack_forwarded,
 )
 
 RECORDINGS_DIR = _ROOT / "recordings"
+DEFAULT_BACKEND_URL = "ws://localhost:8000/ws/imu"
 CSV_HEADER = [
     "host_time", "seq", "device_ms",
     "wrist_ok", "w_ax", "w_ay", "w_az", "w_gx", "w_gy", "w_gz",
@@ -60,9 +64,49 @@ def _fmt(sample) -> str:
     return f"acc {ax:5.2f} {ay:5.2f} {az:5.2f}  gyro {gx:7.1f} {gy:7.1f} {gz:7.1f}"
 
 
+class Forwarder:
+    """Sends packets to the backend over a WebSocket, reconnecting as needed.
+
+    Packets go through a bounded queue so a slow or offline backend can never
+    block the Bluetooth callback. If the queue fills up, the oldest packets
+    are dropped, since for live coaching only fresh data matters.
+    """
+
+    def __init__(self, url: str, max_queue: int = 100) -> None:
+        self.url = url
+        self.queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=max_queue)
+        self.connected = False
+        self.discarded = 0
+
+    def push(self, message: bytes) -> None:
+        if self.queue.full():
+            self.queue.get_nowait()
+            self.discarded += 1
+        self.queue.put_nowait(message)
+
+    async def run(self) -> None:
+        warned = False
+        while True:
+            try:
+                async with websockets.connect(self.url) as ws:
+                    self.connected = True
+                    warned = False
+                    print(f"Forwarding to {self.url}")
+                    while True:
+                        await ws.send(await self.queue.get())
+            except (OSError, websockets.exceptions.WebSocketException) as e:
+                self.connected = False
+                if not warned:
+                    print(f"Backend not reachable at {self.url} ({e}). Is the server running? Retrying...")
+                    warned = True
+                await asyncio.sleep(2.0)
+
+
 class Bridge:
-    def __init__(self, show: bool, record_seconds: float | None) -> None:
+    def __init__(self, show: bool, record_seconds: float | None,
+                 forwarder: Forwarder | None = None) -> None:
         self.show = show
+        self.forwarder = forwarder
         self.record_seconds = record_seconds
         self.drops = DropCounter()
         self.bad_packets = 0
@@ -108,6 +152,8 @@ class Bridge:
 
         self.drops.update(pkt.seq)
         self.latest = pkt
+        if self.forwarder:
+            self.forwarder.push(pack_forwarded(host_time, bytes(data)))
         self._count_this_sec += 1
 
         if self._writer and not self.recording_done():
@@ -130,6 +176,8 @@ class Bridge:
             line += f"  bad {self.bad_packets}"
         if self._writer:
             line += f"  REC {self.recorded}"
+        if self.forwarder:
+            line += "  fwd " + ("OK" if self.forwarder.connected else "--")
         print(line)
         if self.show and pkt:
             print(f"    wrist {_fmt(pkt.wrist)}")
@@ -146,6 +194,8 @@ async def find_device(timeout: float = 10.0):
 
 
 async def run(bridge: Bridge) -> None:
+    if bridge.forwarder:
+        asyncio.create_task(bridge.forwarder.run())
     while True:
         print(f"Scanning for {DEVICE_NAME}...")
         device = await find_device()
@@ -179,9 +229,12 @@ def main() -> None:
     parser.add_argument("--show", action="store_true", help="print sensor values each second")
     parser.add_argument("--record", type=float, metavar="SECONDS",
                         help="save this many seconds of data to backend/recordings/")
+    parser.add_argument("--forward", nargs="?", const=DEFAULT_BACKEND_URL, metavar="URL",
+                        help=f"send data to the backend (default {DEFAULT_BACKEND_URL})")
     args = parser.parse_args()
 
-    bridge = Bridge(show=args.show, record_seconds=args.record)
+    forwarder = Forwarder(args.forward) if args.forward else None
+    bridge = Bridge(show=args.show, record_seconds=args.record, forwarder=forwarder)
     try:
         asyncio.run(run(bridge))
     except KeyboardInterrupt:
