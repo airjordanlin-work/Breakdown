@@ -128,3 +128,28 @@ class DropCounter:
     def drop_rate(self) -> float:
         total = self.received + self.dropped
         return self.dropped / total if total else 0.0
+
+
+# ---------------------------------------------------------------------------
+# Bridge -> backend forwarding format
+#
+# The bridge stamps each packet with the laptop's clock when it arrives, then
+# forwards [8-byte float host_time][32-byte firmware packet] over a WebSocket.
+# The backend and the browser read the same laptop clock, so IMU samples and
+# camera frames can be lined up directly by timestamp.
+# ---------------------------------------------------------------------------
+_FWD_HEADER = struct.Struct("<d")
+FORWARDED_SIZE = _FWD_HEADER.size + PACKET_SIZE  # 40 bytes
+
+
+def pack_forwarded(host_time: float, packet: bytes) -> bytes:
+    if len(packet) != PACKET_SIZE:
+        raise PacketError(f"expected {PACKET_SIZE}-byte packet, got {len(packet)}")
+    return _FWD_HEADER.pack(host_time) + packet
+
+
+def unpack_forwarded(message: bytes) -> tuple[float, ImuPacket]:
+    if len(message) != FORWARDED_SIZE:
+        raise PacketError(f"expected {FORWARDED_SIZE}-byte message, got {len(message)}")
+    (host_time,) = _FWD_HEADER.unpack_from(message)
+    return host_time, decode_packet(message[_FWD_HEADER.size:])
