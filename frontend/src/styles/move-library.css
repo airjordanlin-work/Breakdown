@@ -1,0 +1,270 @@
+/* Move library: fighting-game style move select for Breakdown.
+   One bold element (the preview stage); everything around it stays quiet. */
+
+.library {
+  --asphalt: #060608;
+  --concrete: #131317;
+  --seam: #26262c;
+  --chalk: #eee9e0;
+  --dust: #8a857c;
+  --spray: #ff2d2d;
+  --tier-beginner: #7cf29b;
+  --tier-intermediate: #c77dff;
+  --tier-advanced: #ff9f1c;
+
+  --display: "Anton", "Arial Black", sans-serif;
+  --ui: "Barlow Condensed", "Arial Narrow", sans-serif;
+
+  min-height: 100vh;
+  background: var(--asphalt);
+  color: var(--chalk);
+  font-family: var(--ui);
+  font-size: 18px;
+  line-height: 1.35;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 360px;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "bar   bar   bar"
+    "list  stage sheet";
+}
+
+.library [data-tier="Beginner"]     { --tier: var(--tier-beginner); }
+.library [data-tier="Intermediate"] { --tier: var(--tier-intermediate); }
+.library [data-tier="Advanced"]     { --tier: var(--tier-advanced); }
+
+.library button { font-family: var(--ui); }
+.library :focus-visible { outline: 2px solid var(--chalk); outline-offset: 3px; }
+
+/* top bar */
+.library-bar {
+  grid-area: bar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 28px;
+  border-bottom: 1px solid var(--seam);
+}
+.wordmark {
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 28px;
+  letter-spacing: 0.02em;
+  color: var(--chalk);
+}
+.sensor-pill {
+  font-size: 15px;
+  color: var(--dust);
+  padding: 4px 12px;
+  border: 1px solid var(--seam);
+  border-radius: 999px;
+}
+.sensor-pill.on { color: var(--tier-beginner); border-color: #2c5a3a; }
+
+/* move list */
+.move-list {
+  grid-area: list;
+  border-right: 1px solid var(--seam);
+  padding: 20px 0;
+  overflow-y: auto;
+}
+.tier + .tier { margin-top: 22px; }
+.tier-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--tier);
+  padding: 0 24px 6px;
+}
+.tier ul { list-style: none; }
+.move-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-left: 3px solid transparent;
+  color: var(--dust);
+  font-size: 22px;
+  font-weight: 500;
+  padding: 6px 21px;
+  cursor: pointer;
+}
+.move-item:hover { color: var(--chalk); }
+.move-item.selected {
+  color: var(--chalk);
+  border-left-color: var(--tier);
+  background: linear-gradient(90deg, var(--concrete), transparent);
+}
+
+/* preview stage: the memorable part */
+.stage {
+  grid-area: stage;
+  position: relative;
+  margin: 0;
+  overflow: hidden;
+  min-height: 420px;
+}
+.stage-title {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--display);
+  font-size: clamp(90px, 16vw, 240px);
+  line-height: 0.9;
+  text-align: center;
+  color: transparent;
+  -webkit-text-stroke: 1px #2a2a30;
+  user-select: none;
+  pointer-events: none;
+  padding: 0 20px;
+}
+.stage-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.stage-note {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--dust);
+}
+.stage-controls {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+}
+.stage-controls button {
+  background: var(--concrete);
+  color: var(--chalk);
+  border: 1px solid var(--seam);
+  border-radius: 999px;
+  font-size: 16px;
+  padding: 6px 16px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.stage-controls button:hover:not(:disabled) { border-color: var(--dust); }
+.stage-controls button[aria-pressed="true"] { border-color: var(--spray); }
+
+/* skill sheet */
+.sheet {
+  grid-area: sheet;
+  border-left: 1px solid var(--seam);
+  padding: 28px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.sheet-tier {
+  color: var(--tier);
+  font-weight: 600;
+  font-size: 17px;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.sheet-tier-note { color: var(--dust); font-weight: 400; font-size: 14px; }
+.sheet-name {
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 54px;
+  line-height: 1;
+  margin: 6px 0 12px;
+}
+.sheet-desc { color: #c9c4ba; max-width: 34ch; }
+
+.stats { margin: 24px 0 8px; display: grid; gap: 10px; }
+.stat {
+  display: grid;
+  grid-template-columns: 84px 1fr 32px;
+  align-items: center;
+  gap: 10px;
+}
+.stat-label { color: var(--dust); font-size: 17px; }
+.stat-track { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; }
+.seg { height: 10px; background: var(--concrete); transform: skewX(-18deg); }
+.seg.on { background: var(--tier); }
+.stat-value { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.sheet-heading { font-size: 17px; font-weight: 600; margin: 22px 0 8px; }
+.reqs, .tips { list-style: none; display: grid; gap: 6px; }
+.req, .tips li {
+  padding-left: 18px;
+  position: relative;
+  color: #c9c4ba;
+}
+.req::before, .tips li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 7px;
+  height: 7px;
+  background: var(--seam);
+}
+.req.met::before { background: var(--tier-beginner); }
+.req.unmet::before { background: var(--tier-advanced); }
+.req-state { display: block; font-size: 14px; color: var(--dust); }
+
+.start {
+  margin-top: auto;
+  background: var(--spray);
+  color: var(--asphalt);
+  border: none;
+  font-family: var(--display) !important;
+  font-size: 26px;
+  letter-spacing: 0.03em;
+  padding: 14px 20px;
+  cursor: pointer;
+  clip-path: polygon(0 0, 100% 0, 96% 100%, 0 100%);
+}
+.sheet .start { margin-top: 28px; }
+.start:hover:not(:disabled) { background: #ff4a4a; }
+.start:disabled { opacity: 0.6; cursor: progress; }
+.keys-hint { margin-top: 10px; font-size: 14px; color: var(--dust); }
+
+.library--empty {
+  display: grid;
+  place-content: center;
+  gap: 16px;
+  text-align: center;
+  grid-template-columns: none;
+  grid-template-areas: none;
+  color: var(--dust);
+}
+
+/* tablet and phone: list becomes a swipeable strip, sheet goes under the stage */
+@media (max-width: 980px) {
+  .library {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto minmax(340px, 50vh) auto;
+    grid-template-areas: "bar" "list" "stage" "sheet";
+  }
+  .move-list {
+    border-right: none;
+    border-bottom: 1px solid var(--seam);
+    display: flex;
+    gap: 24px;
+    padding: 12px 20px;
+    overflow-x: auto;
+  }
+  .tier + .tier { margin-top: 0; }
+  .tier ul { display: flex; }
+  .tier-name { padding: 0 0 4px; }
+  .move-item { border-left: none; border-bottom: 3px solid transparent; padding: 4px 10px; white-space: nowrap; }
+  .move-item.selected { border-bottom-color: var(--tier); background: none; }
+  .sheet { border-left: none; border-top: 1px solid var(--seam); }
+  .keys-hint { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .library * { transition: none !important; }
+}
