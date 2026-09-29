@@ -4,7 +4,6 @@ import { useCamera }    from "../hooks/useCamera";
 import ScoreHUD         from "../components/ScoreHUD";
 import KeyframeFlash    from "../components/KeyframeFlash";
 import SkeletonCanvas   from "../components/SkeletonCanvas";
-import CoachCue from "../components/CoachCue";
 
 export default function Session({ sessionId, onEnd }) {
   const [landmarks,   setLandmarks]   = useState([]);
@@ -18,9 +17,8 @@ export default function Session({ sessionId, onEnd }) {
   const [stats,       setStats]       = useState(null);
   const [scoreResult, setScoreResult] = useState(null);
   const [debugMode,   setDebugMode]   = useState(false);
-  const [cameraFrame, setCameraFrame] = useState(null);
+  const [latencyMs,   setLatencyMs]   = useState(null);
   const [wsReady,     setWsReady]     = useState(false);
-  const [coachCue, setCoachCue] = useState("");
 
   const handleEnd = async () => {
     await fetch(`http://localhost:8000/session/${sessionId}`, { method: "DELETE" });
@@ -29,6 +27,7 @@ export default function Session({ sessionId, onEnd }) {
 
   const handleMessage = useCallback((msg) => {
     if (msg.type !== "frame") return;
+    if (msg._rttMs !== undefined)       setLatencyMs(msg._rttMs);
     if (msg.landmarks)                  setLandmarks(msg.landmarks);
     if (msg.visibility)                 setVisibility(msg.visibility);
     if (msg.ghost_bones)                setGhostBones(msg.ghost_bones);
@@ -39,21 +38,19 @@ export default function Session({ sessionId, onEnd }) {
     if (msg.guidance    !== undefined)  setGuidance(msg.guidance);
     if (msg.stats)                      setStats(msg.stats);
     if (msg.score_result)               setScoreResult(msg.score_result);
-    if (msg.type === "coach_cue") {
-      setCoachCue(msg.cue);
-      return;
-    }
   }, []);
 
   const onWsOpen  = useCallback(() => setWsReady(true), []);
-  const { sendFrame } = useWebSocket(sessionId, handleMessage, onWsOpen);
+  const { sendFrame, canSend } = useWebSocket(sessionId, handleMessage, onWsOpen);
 
-  const handleFrame = useCallback((b64) => {
-    sendFrame(b64);
-    setCameraFrame(`data:image/jpeg;base64,${b64}`);
-  }, [sendFrame]);
+  // Only send. The debug view now shows the live <video> element directly,
+  // so we no longer re-render the whole page with a base64 image every frame.
+  const handleFrame = useCallback((b64) => { sendFrame(b64); }, [sendFrame]);
 
-  const { videoRef, canvasRef, startCapture, stopCapture } = useCamera(handleFrame, 15);
+  // fps is now a ceiling, not a fixed rate. Backpressure in canSend() means the
+  // real rate automatically matches how fast the backend can keep up.
+  const { videoRef, canvasRef, startCapture, stopCapture } =
+    useCamera(handleFrame, { fps: 30, maxWidth: 480, canSend });
 
   useEffect(() => {
     const t = setTimeout(() => startCapture(), 800);
@@ -138,6 +135,13 @@ export default function Session({ sessionId, onEnd }) {
 
         {/* view */}
         <div style={{ flex: 1, position: "relative", overflow: "hidden", background: "#060608" }}>
+          {/* Live camera feed. Always mounted so the stream stays attached; only visible
+              in debug mode. Mirrored to match the backend's cv2.flip. */}
+          <video ref={videoRef} autoPlay playsInline muted
+            style={debugMode
+              ? { position:"absolute", inset:0, width:"100%", height:"100%",
+                  objectFit:"contain", transform:"scaleX(-1)" }
+              : { display:"none" }} />
           {!wsReady ? (
             <div style={{
               width:"100%", height:"100%",
@@ -152,14 +156,10 @@ export default function Session({ sessionId, onEnd }) {
               </div>
             </div>
           ) : debugMode ? (
-            cameraFrame
-              ? <img src={cameraFrame} alt="debug"
-                  style={{ width:"100%", height:"100%", objectFit:"contain", display:"block" }} />
-              : <div style={{ width:"100%", height:"100%", display:"flex",
-                  alignItems:"center", justifyContent:"center",
-                  color:"#2a2a2a", fontSize:10, letterSpacing:"0.2em" }}>
-                  WAITING FOR CAMERA...
-                </div>
+            <div style={{ position:"absolute", top:12, left:12, zIndex:2,
+              fontSize:10, letterSpacing:"0.2em", color:"#ff2d2d" }}>
+              ROUND TRIP {latencyMs ?? "--"} MS
+            </div>
           ) : (
             <SkeletonCanvas
               landmarks={landmarks}
@@ -175,7 +175,6 @@ export default function Session({ sessionId, onEnd }) {
           {scoreResult && (
             <KeyframeFlash result={scoreResult} onDone={() => setScoreResult(null)} />
           )}
-          <CoachCue cue={coachCue} />
         </div>
 
         {/* ── sidebar ── */}
@@ -223,7 +222,6 @@ export default function Session({ sessionId, onEnd }) {
         </div>
       </div>
 
-      <video ref={videoRef} autoPlay playsInline muted style={{ display:"none" }} />
       <canvas ref={canvasRef} style={{ display:"none" }} />
     </div>
   );
