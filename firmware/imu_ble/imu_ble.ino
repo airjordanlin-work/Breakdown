@@ -37,8 +37,8 @@ static const int SDA_A = 8;
 static const int SCL_A = 9;
 
 // Sensor B (leg) on I2C bus 1. CHANGE to the pins you actually wired.
-static const int SDA_B = 4;
-static const int SCL_B = 5;
+static const int SDA_B = 5;
+static const int SCL_B = 6;
 
 static const uint32_t I2C_HZ   = 400000;  // 400kHz "fast mode"
 static const uint8_t  MPU_ADDR = 0x68;    // AD0 pin low (default on GY-521 boards)
