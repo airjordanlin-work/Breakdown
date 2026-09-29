@@ -144,11 +144,6 @@ class FreezeTracker:
         self._last_motion: Optional[float] = None
         self.last_result: Optional[FreezeResult] = None
 
-    @property
-    def holding(self) -> bool:
-        """True while a hold is in progress (even before it's long enough to count)."""
-        return bool(self._hold)
-
     def _peak(self, s: TimedImuSample) -> Optional[float]:
         mags = [_gyro_mag(x) for x in (s.packet.wrist, s.packet.leg) if x is not None]
         return max(mags) if mags else None
