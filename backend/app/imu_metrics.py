@@ -24,6 +24,8 @@ STILL_DPS = 30.0      # below this on every sensor = holding still
 MOTION_DPS = 80.0     # above this = real movement (not just a twitch)
 MIN_HOLD_S = 0.5      # shorter holds aren't counted as freezes
 LOOKBACK_S = 2.0      # a hold only counts if you were moving this recently
+SETTLE_S = 0.25       # ignore this much at each end of a hold when scoring:
+                      # the body is still slowing down / starting to move
 
 # Wobble (deg/s of spread) to tier boundaries
 TIERS = [(4.0, "rock solid"), (8.0, "steady"), (15.0, "shaky")]
@@ -82,7 +84,23 @@ class FreezeResult:
         }
 
 
-def score_hold(samples: Sequence[TimedImuSample]) -> FreezeResult:
+def _trim_edges(samples: Sequence[TimedImuSample], settle_s: float) -> Sequence[TimedImuSample]:
+    """Drop the settling-in and settling-out parts of a hold.
+
+    A hold is detected the moment rotation drops under STILL_DPS, but the body
+    is still decelerating for a fraction of a second after that. Scoring those
+    edges would grade the landing into the freeze, not the freeze itself.
+    Falls back to the full hold if trimming would leave too little.
+    """
+    t0, t1 = samples[0].host_time + settle_s, samples[-1].host_time - settle_s
+    core = [s for s in samples if t0 <= s.host_time <= t1]
+    return core if len(core) >= 10 else samples
+
+
+def score_hold(samples: Sequence[TimedImuSample], settle_s: float = SETTLE_S) -> FreezeResult:
+    duration = samples[-1].host_time - samples[0].host_time
+    start = samples[0].host_time
+    samples = _trim_edges(samples, settle_s)
     wrist = [s.packet.wrist.gyro_dps for s in samples if s.packet.wrist]
     leg = [s.packet.leg.gyro_dps for s in samples if s.packet.leg]
     wrist_w = _spread(wrist) if len(wrist) >= 2 else None
@@ -98,8 +116,8 @@ def score_hold(samples: Sequence[TimedImuSample]) -> FreezeResult:
         shakiest = "wrist" if wrist_w is not None else "leg"
 
     return FreezeResult(
-        start_time=samples[0].host_time,
-        duration_s=samples[-1].host_time - samples[0].host_time,
+        start_time=start,
+        duration_s=duration,
         wobble_dps=wobble,
         wrist_wobble_dps=wrist_w,
         leg_wobble_dps=leg_w,

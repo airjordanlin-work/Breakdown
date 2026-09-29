@@ -82,3 +82,13 @@ def test_result_only_arrives_when_the_hold_ends():
     assert results == []                     # still holding
     live = tracker.current()
     assert live is not None and live["tier"] == "rock solid"
+
+
+def test_settling_into_the_freeze_is_not_graded_as_wobble():
+    # Rotation decays from 29 to ~1 deg/s over the first 0.2s: the body
+    # slowing down, not shaking. The freeze itself is dead still.
+    settling = lambda i: (max(29.0 - i * 3.0, 1.0), -0.5, 1.5)
+    _, results = run(segment(0, 1, MOVING, MOVING),
+                     segment(1, 1.5, settling, STILL),
+                     segment(2.5, 0.5, MOVING, MOVING))
+    assert results[0].tier == "rock solid"
