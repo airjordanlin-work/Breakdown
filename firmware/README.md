@@ -12,8 +12,8 @@ Each sensor gets its own I2C bus, so both can keep the default address 0x68.
 |--------------|------------------|----------------|
 | VCC          | 3V3              | 3V3            |
 | GND          | GND              | GND            |
-| SDA          | GPIO 8           | GPIO 4         |
-| SCL          | GPIO 9           | GPIO 5         |
+| SDA          | GPIO 8           | GPIO 5         |
+| SCL          | GPIO 9           | GPIO 6         |
 
 If you wired different pins, change `SDA_A`, `SCL_A`, `SDA_B`, `SCL_B` at the
 top of `imu_ble/imu_ble.ino`.
