@@ -32,6 +32,7 @@ from app.coach import AICoach
 from app.voice import VoiceCoach
 from app.imu_protocol import PacketError, unpack_forwarded
 from app.imu_store import ImuStore
+from app.freeze_monitor import FreezeMonitor
 
 app = FastAPI(title="Breakdance Coach API")
 app.add_middleware(
@@ -124,6 +125,7 @@ class CoachingSession:
         self.pose_frame     = None
         self.frame_idx      = 0
         self.last_captured_at: Optional[float] = None
+        self.freeze         = FreezeMonitor(_imu_store)
         self.pending_cue: Optional[asyncio.Task] = None
 
         dummy = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -175,6 +177,13 @@ class CoachingSession:
 
         if self.flash_counter > 0:
             self.flash_counter -= 1
+
+        # IMU decides when a freeze happens and how steady it was; this
+        # frame's pose lets the camera veto standing pauses.
+        freeze = self.freeze.on_frame(
+            pose.raw_landmarks if pose is not None else None,
+            pose.visibility if pose is not None else None,
+        )
 
         fill_ratio = len(self.buf) / WINDOW_LEN
         move_name  = (self.dtw_result.move_name
@@ -237,12 +246,14 @@ class CoachingSession:
             },
             "score_result": score_payload,
             "imu":          _imu_payload(captured_at),
+            "freeze":       freeze,
             # snapshot for AI coach — passed separately in ws handler
             "_coach_context": {
                 "move_name":    move_name or "",
                 "aligned":      bool(self.dtw_result.aligned) if self.dtw_result else False,
                 "fill_ratio":   round(fill_ratio, 3),
                 "score_result": score_payload,
+                "freeze":       freeze["result"],
             },
         }
 
@@ -351,14 +362,23 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                 # send frame data to frontend immediately
                 await websocket.send_text(json.dumps(payload))
 
-                # fire AI coach if cooldown allows — non-blocking
-                if session.ai_coach.should_fire():
+                # fire AI coach — non-blocking.
+                # A finished freeze gets feedback right away (skips the cooldown);
+                # everything else waits for the normal cooldown.
+                coach = session.ai_coach
+                freeze_result = coach_ctx.get("freeze")
+                fire = coach.can_fire_now() if freeze_result else coach.should_fire(
+                    aligned=coach_ctx.get("aligned", False),
+                    fill_ratio=coach_ctx.get("fill_ratio", 0),
+                )
+                if fire:
                     async def _fire_cue(ctx=coach_ctx):
                         cue = await session.ai_coach.get_cue(
                             move_name    = ctx.get("move_name", ""),
                             aligned      = ctx.get("aligned", False),
                             fill_ratio   = ctx.get("fill_ratio", 0),
                             score_result = ctx.get("score_result"),
+                            freeze       = ctx.get("freeze"),
                         )
                         if cue:
                             # speak through Kokoro

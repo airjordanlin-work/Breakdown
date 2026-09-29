@@ -50,6 +50,37 @@ Bad examples (never say these):
 "Engage your core"
 """
 
+# Wearable sensor names -> how a coach would say it
+_LIMB_WORDS = {"wrist": "base arm", "leg": "legs"}
+
+
+def _build_freeze_prompt(freeze: dict, last_cue: Optional[str]) -> str:
+    """Prompt for a cue right after a freeze, based on wearable IMU data.
+
+    Only facts the sensors actually measured go into the prompt, so the cue
+    can't invent feedback the data doesn't support.
+    """
+    tier      = freeze.get("tier", "")
+    duration  = freeze.get("duration_s", 0)
+    stability = freeze.get("stability", 0)
+    limb      = _LIMB_WORDS.get(freeze.get("shakiest") or "", "body")
+
+    lines = [
+        "The user just finished a freeze, measured by motion sensors on their body.",
+        f"Held for {duration:.1f} seconds. Stability {stability}/100, rated \"{tier}\".",
+    ]
+    if tier in ("rock solid", "steady"):
+        lines.append("It was clean. Give a short hype cue that acknowledges the hold.")
+    else:
+        lines.append(f"It was wobbly, mostly in the {limb}.")
+        lines.append(f"Give a short correction cue about stabilizing the {limb}.")
+    lines.append("Only mention the hold time if you use the exact number above.")
+    if last_cue:
+        lines.append(f'Do NOT repeat: "{last_cue}"')
+    lines.append("ONE phrase, max 10 words, sound like a real bboy coach.")
+    return "\n".join(lines)
+
+
 def _build_prompt(
     move_name: str,
     aligned: bool,
@@ -125,6 +156,10 @@ class AICoach:
         else:
             print(f"AICoach: ready — model={MODEL} cooldown={COOLDOWN_SECONDS}s")
 
+    def can_fire_now(self) -> bool:
+        """For event-driven cues (like a finished freeze) that skip the cooldown."""
+        return self._available and not self._pending
+
     def should_fire(self, aligned: bool = False, fill_ratio: float = 0) -> bool:
         if not self._available or self._pending:
             return False
@@ -137,6 +172,7 @@ class AICoach:
         aligned: bool,
         fill_ratio: float,
         score_result: Optional[dict],
+        freeze: Optional[dict] = None,
     ) -> Optional[str]:
         """Call Claude Haiku and return a coaching cue string, or None on failure."""
         if not self._available:
@@ -145,13 +181,16 @@ class AICoach:
         self._pending    = True
         self._last_called = time.time()
 
-        prompt = _build_prompt(
-            move_name   = move_name,
-            aligned     = aligned,
-            fill_ratio  = fill_ratio,
-            score_result= score_result,
-            last_cue    = self._last_cue,
-        )
+        if freeze:
+            prompt = _build_freeze_prompt(freeze, self._last_cue)
+        else:
+            prompt = _build_prompt(
+                move_name   = move_name,
+                aligned     = aligned,
+                fill_ratio  = fill_ratio,
+                score_result= score_result,
+                last_cue    = self._last_cue,
+            )
 
         try:
             async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
