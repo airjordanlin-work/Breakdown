@@ -187,7 +187,11 @@ def facing_angle(seq: np.ndarray) -> float:
 
 
 def preview(reference_dir: Path, move_id: str) -> Optional[dict[str, Any]]:
-    """Skeleton frames for the animated preview, in screen coordinates (y down)."""
+    """Frames for the animated preview: [x, y, depth] per joint.
+
+    x and y are screen coordinates (y down); depth is larger for joints
+    closer to the viewer, so the frontend can draw far limbs first.
+    """
     npy = Path(reference_dir) / f"{move_id}.npy"
     if not npy.exists() or "/" in move_id or ".." in move_id:
         return None
@@ -196,10 +200,17 @@ def preview(reference_dir: Path, move_id: str) -> Optional[dict[str, Any]]:
     a = facing_angle(seq)
     joints = seq[:, PREVIEW_JOINTS, :]
     x = joints[..., 0] * np.cos(a) + joints[..., 2] * np.sin(a)
+    d = -joints[..., 0] * np.sin(a) + joints[..., 2] * np.cos(a)   # depth
     y = joints[..., 1] * -s                        # y-up -> screen y-down
-    pts = np.stack([x, y], axis=-1)
+    pts = np.stack([x, y, d], axis=-1)
     neck = (pts[:, 1] + pts[:, 2]) / 2
     pts = np.concatenate([pts, neck[:, None, :]], axis=1)
+    # Make larger depth mean "closer to the viewer": the face points at the
+    # viewer, so the nose should usually sit in front of the neck. If not,
+    # turn the figure around (a 180 degree turn flips both x and depth).
+    if (pts[:, 0, 2] - pts[:, NECK, 2]).mean() < 0:
+        pts[..., 0] *= -1
+        pts[..., 2] *= -1
     return {
         "id": move_id,
         "fps": PREVIEW_FPS,

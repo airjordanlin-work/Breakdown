@@ -84,3 +84,20 @@ def test_preview_turns_a_side_view_to_face_the_viewer(tmp_path):
     save(tmp_path, "side", seq)
     f = preview(tmp_path, "side")["frames"][0]
     assert abs(f[1][0] - f[2][0]) > 1.5         # shoulders now spread across the screen
+
+
+def test_preview_depth_puts_the_face_toward_the_viewer(tmp_path):
+    seq = standing()
+    seq[:, 0, 2] = -0.5                          # nose points toward -z
+    save(tmp_path, "facing", seq)
+    f = preview(tmp_path, "facing")["frames"][0]
+    assert f[0][2] > f[NECK][2]                  # nose ends up nearer than the neck
+
+
+def test_preview_includes_depth_per_joint(tmp_path):
+    seq = standing()
+    seq[:, 15, 2] = 2.0                          # left wrist reaching toward the camera
+    save(tmp_path, "reach", seq)
+    f = preview(tmp_path, "reach")["frames"][0]
+    assert all(len(j) == 3 for j in f)
+    assert f[5][2] != f[6][2]                    # left and right wrists at different depths

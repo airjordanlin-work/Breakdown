@@ -152,7 +152,12 @@
   cursor: pointer;
 }
 .stage-controls button:hover:not(:disabled) { border-color: var(--dust); }
-.stage-controls button[aria-pressed="true"] { border-color: var(--spray); }
+.stage-controls button[aria-pressed="true"] { border-color: var(--spray); color: var(--spray); }
+.speed { display: flex; }
+.speed button { border-radius: 0; margin-left: -1px; padding: 6px 12px; }
+.speed button:first-child { border-radius: 999px 0 0 999px; margin-left: 0; }
+.speed button:last-child { border-radius: 0 999px 999px 0; }
+.speed button[aria-pressed="true"] { position: relative; z-index: 1; }
 
 /* skill sheet */
 .sheet {
@@ -267,4 +272,28 @@
 
 @media (prefers-reduced-motion: reduce) {
   .library * { transition: none !important; }
+}
+
+/* segmented speed and view pickers */
+.segmented {
+  display: flex;
+  background: var(--concrete);
+  border: 1px solid var(--seam);
+  border-radius: 999px;
+  padding: 2px;
+}
+.library .segmented button {
+  background: none;
+  border: none;
+  border-radius: 999px;
+  padding: 4px 11px;
+  color: var(--dust);
+  font-variant-numeric: tabular-nums;
+}
+.library .segmented button[aria-pressed="true"] {
+  background: var(--chalk);
+  color: var(--asphalt);
+}
+@media (max-width: 980px) {
+  .stage-controls { flex-wrap: wrap; justify-content: center; width: 94%; }
 }
