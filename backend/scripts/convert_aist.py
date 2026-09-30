@@ -181,6 +181,36 @@ def default_meta(move_name: str, pkl_name: str, dtw_threshold: float) -> dict:
     }
 
 
+def remap_keyframes(meta: dict, clip_meta: dict, old_frames: int) -> list[dict]:
+    """Map via source frames; -1 disables scoring while retaining joint edits."""
+    # Metadata times are rounded to milliseconds; recover integer source frames
+    # before mapping the endpoint-inclusive samples produced by resample().
+    fps = clip_meta["source_fps"]
+    new_start = round(clip_meta["clip_start_s"] * fps)
+    new_span = round(clip_meta["duration_s"] * fps) - 1
+    try:
+        if not any(k in meta for k in ("coords_version", "clip_start_s", "duration_s")):
+            # The original converter resampled the entire source sequence.
+            old_start, old_span = 0, clip_meta["original_frames"] - 1
+        else:
+            old_start = round(meta["clip_start_s"] * fps)
+            old_span = round(meta["duration_s"] * fps) - 1
+        timing_known = old_start >= 0 and old_span >= 0 and old_frames > 0
+    except (KeyError, TypeError, ValueError, OverflowError):
+        timing_known = False
+
+    keyframes = []
+    for entry in meta.get("keyframes", []):
+        frame = entry.get("frame", -1)
+        mapped = -1
+        if timing_known and isinstance(frame, int) and 0 <= frame < old_frames:
+            source_frame = old_start + frame * old_span / max(old_frames - 1, 1)
+            if new_start <= source_frame <= new_start + new_span:
+                mapped = round((source_frame - new_start) * (TARGET_FRAMES - 1) / max(new_span, 1))
+        keyframes.append({**entry, "frame": mapped})
+    return keyframes
+
+
 def convert_file(pkl_path: Path, output_dir: Path, move_name: str,
                  dtw_threshold: float, seconds: float, existing_meta: dict | None = None) -> bool:
     try:
@@ -190,9 +220,13 @@ def convert_file(pkl_path: Path, output_dir: Path, move_name: str,
             print(f"  SKIPPED, corrupted data (max={max_val:.1f})")
             return False
 
-        # Keep anything already written in the meta file (names, tips,
-        # keyframes); only refresh the fields describing the data.
-        meta = existing_meta or default_meta(move_name, pkl_path.name, dtw_threshold)
+        # Preserve user edits, but align keyframes with the rebuilt clip.
+        meta = dict(existing_meta) if existing_meta is not None else default_meta(
+            move_name, pkl_path.name, dtw_threshold)
+        if existing_meta is not None:
+            old_path = output_dir / f"{move_name}.npy"
+            old_frames = np.load(old_path, mmap_mode="r").shape[0] if old_path.exists() else TARGET_FRAMES
+            meta["keyframes"] = remap_keyframes(existing_meta, clip_meta, old_frames)
         meta.update(clip_meta)
 
         np.save(output_dir / f"{move_name}.npy", flat)

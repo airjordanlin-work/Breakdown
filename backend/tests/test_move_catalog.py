@@ -3,8 +3,9 @@
 import json
 
 import numpy as np
+import pytest
 
-from app.move_catalog import NECK, load_catalog, preview, up_sign
+from app.move_catalog import DEFAULT_DURATION_S, NECK, PREVIEW_FPS, load_catalog, preview, up_sign
 
 T = 20
 
@@ -131,3 +132,28 @@ def test_power_uses_real_duration(tmp_path):
 def test_preview_plays_in_real_time(tmp_path):
     save(tmp_path, "a", standing(), duration_s=2.0)
     assert preview(tmp_path, "a")["fps"] == round((T - 1) / 2.0, 3)
+
+
+@pytest.mark.parametrize("duration", [0, -2, float("nan"), float("inf"), -float("inf"),
+                                     None, "invalid", 5e-324])
+def test_invalid_duration_falls_back_and_serializes(tmp_path, duration):
+    save(tmp_path, "invalid", standing(arm_speed=0.2), duration_s=duration)
+    save(tmp_path, "default", standing(arm_speed=0.2), duration_s=DEFAULT_DURATION_S)
+    moves = load_catalog(tmp_path)
+    assert all(m.stats["power"] == 100 for m in moves)
+    assert moves[0]._power_raw == pytest.approx(moves[1]._power_raw)
+    p = preview(tmp_path, "invalid")
+    assert p["fps"] == round((T - 1) / DEFAULT_DURATION_S, 3)
+    json.dumps([m.to_dict() for m in moves], allow_nan=False)
+    json.dumps(p, allow_nan=False)
+
+
+def test_extreme_finite_power_serializes(tmp_path):
+    save(tmp_path, "a", standing(arm_speed=0.2), duration_s=1e-307)
+    assert load_catalog(tmp_path)[0].stats["power"] == 100
+    json.dumps(preview(tmp_path, "a"), allow_nan=False)
+
+
+def test_preview_without_duration_keeps_default_fps(tmp_path):
+    save(tmp_path, "a", standing())
+    assert preview(tmp_path, "a")["fps"] == PREVIEW_FPS

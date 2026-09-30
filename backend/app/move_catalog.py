@@ -16,6 +16,7 @@ Optional meta fields a move can set:
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -96,6 +97,14 @@ def up_sign(seq: np.ndarray) -> float:
     return 1.0 if seq[:, NOSE, 1].mean() > seq[:, [L_AN, R_AN], 1].mean() else -1.0
 
 
+def _duration_seconds(value: Any) -> float:
+    try:
+        duration = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_DURATION_S
+    return duration if math.isfinite(duration) and duration > 0 else DEFAULT_DURATION_S
+
+
 def measure(seq: np.ndarray, duration_s: float = DEFAULT_DURATION_S) -> tuple[float, float, float]:
     """(inversion fraction, floor fraction, raw power) for one sequence.
 
@@ -114,8 +123,11 @@ def measure(seq: np.ndarray, duration_s: float = DEFAULT_DURATION_S) -> tuple[fl
     floor = float(np.mean(-lowest < LOW_HIPS))
     limbs = seq[:, [L_WR, R_WR, L_AN, R_AN], :2]
     speed = np.linalg.norm(np.diff(limbs, axis=0), axis=-1)
-    seconds_per_frame = duration_s / max(seq.shape[0] - 1, 1)
-    power = float(speed.mean()) / seconds_per_frame if len(speed) else 0.0
+    distance = float(speed.mean()) * max(seq.shape[0] - 1, 1) if len(speed) else 0.0
+    power = distance / duration_s
+    # Even a positive finite duration can overflow the derived speed.
+    if not math.isfinite(power):
+        power = distance / DEFAULT_DURATION_S
     return inversion, floor, power
 
 
@@ -153,7 +165,7 @@ def load_catalog(reference_dir: Path) -> list[MoveInfo]:
             continue
 
         seq = _load(npy)
-        inversion, floor, power = measure(seq, float(meta.get("duration_s", DEFAULT_DURATION_S)))
+        inversion, floor, power = measure(seq, _duration_seconds(meta.get("duration_s")))
         source = meta.get("source", "custom")
         moves.append(MoveInfo(
             id=npy.stem,
@@ -176,7 +188,7 @@ def load_catalog(reference_dir: Path) -> list[MoveInfo]:
     # Power is relative to the fastest move in the library, so it reads 0-100.
     top = max((m._power_raw for m in moves), default=0.0) or 1.0
     for m in moves:
-        m.stats = {"power": round(100 * m._power_raw / top), **m.stats}
+        m.stats = {"power": round(100 * (m._power_raw / top)), **m.stats}
         if m.difficulty_override:
             m.difficulty = str(m.difficulty_override).capitalize()
             m.difficulty_measured = False
@@ -217,7 +229,10 @@ def preview(reference_dir: Path, move_id: str) -> Optional[dict[str, Any]]:
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
     duration = meta.get("duration_s")
     # Real-time playback when the clip's length is known.
-    fps = (seq.shape[0] - 1) / float(duration) if duration else PREVIEW_FPS
+    fps = ((seq.shape[0] - 1) / _duration_seconds(duration)
+           if "duration_s" in meta else PREVIEW_FPS)
+    if not math.isfinite(fps):
+        fps = (seq.shape[0] - 1) / DEFAULT_DURATION_S
     s = up_sign(seq)
     a = facing_angle(seq)
     joints = seq[:, PREVIEW_JOINTS, :]
