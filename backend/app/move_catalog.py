@@ -35,9 +35,15 @@ PREVIEW_BONES = [
     [1, 7], [2, 8], [7, 8],
     [7, 9], [9, 11], [8, 10], [10, 12],
 ]
-PREVIEW_FPS = 20
+PREVIEW_FPS = 20          # fallback when a move has no recorded duration
+DEFAULT_DURATION_S = 3.0  # assumed length for moves without duration_s in meta
 
-LOW_HEAD = 1.2        # head within this many hip-widths above the hips = low / on the floor
+LOW_HIPS = 1.6       # hips within this many hip-widths of the lowest body point = on the floor
+                     # (standing puts the hips about 3 hip-widths above the ankles)
+
+# Joints every reference actually contains; AIST++ leaves the rest empty (0),
+# and an empty joint must never count as the "lowest point" of the body.
+from app.dtw_engine import COMPARE_JOINTS as REAL_JOINTS  # noqa: E402
 HIDDEN_BY_DEFAULT = {"t_pose"}
 
 
@@ -90,15 +96,26 @@ def up_sign(seq: np.ndarray) -> float:
     return 1.0 if seq[:, NOSE, 1].mean() > seq[:, [L_AN, R_AN], 1].mean() else -1.0
 
 
-def measure(seq: np.ndarray) -> tuple[float, float, float]:
-    """(inversion fraction, floor fraction, raw power) for one sequence."""
+def measure(seq: np.ndarray, duration_s: float = DEFAULT_DURATION_S) -> tuple[float, float, float]:
+    """(inversion fraction, floor fraction, raw power) for one sequence.
+
+    inversion: share of frames with the head below the hips.
+    floor:     share of frames with the hips close to the lowest body point,
+               i.e. sitting, in footwork, or in a freeze. Crouching or
+               bending forward doesn't count, since the legs still hold the
+               hips up.
+    power:     average speed of wrists and ankles in hip-widths per second,
+               using the clip's real duration.
+    """
     y_up = seq[..., 1] * up_sign(seq)
     head = y_up[:, NOSE]                          # hips are at 0 after normalization
-    inversion = float(np.mean(head < 0))          # head below the hips
-    floor = float(np.mean(head < LOW_HEAD))       # head low: crouched, floor, or inverted
+    inversion = float(np.mean(head < 0))
+    lowest = y_up[:, REAL_JOINTS].min(axis=1)
+    floor = float(np.mean(-lowest < LOW_HIPS))
     limbs = seq[:, [L_WR, R_WR, L_AN, R_AN], :2]
     speed = np.linalg.norm(np.diff(limbs, axis=0), axis=-1)
-    power = float(speed.mean()) if len(speed) else 0.0
+    seconds_per_frame = duration_s / max(seq.shape[0] - 1, 1)
+    power = float(speed.mean()) / seconds_per_frame if len(speed) else 0.0
     return inversion, floor, power
 
 
@@ -136,7 +153,7 @@ def load_catalog(reference_dir: Path) -> list[MoveInfo]:
             continue
 
         seq = _load(npy)
-        inversion, floor, power = measure(seq)
+        inversion, floor, power = measure(seq, float(meta.get("duration_s", DEFAULT_DURATION_S)))
         source = meta.get("source", "custom")
         moves.append(MoveInfo(
             id=npy.stem,
@@ -196,6 +213,11 @@ def preview(reference_dir: Path, move_id: str) -> Optional[dict[str, Any]]:
     if not npy.exists() or "/" in move_id or ".." in move_id:
         return None
     seq = _load(npy)
+    meta_path = npy.with_name(f"{move_id}_meta.json")
+    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    duration = meta.get("duration_s")
+    # Real-time playback when the clip's length is known.
+    fps = (seq.shape[0] - 1) / float(duration) if duration else PREVIEW_FPS
     s = up_sign(seq)
     a = facing_angle(seq)
     joints = seq[:, PREVIEW_JOINTS, :]
@@ -213,7 +235,7 @@ def preview(reference_dir: Path, move_id: str) -> Optional[dict[str, Any]]:
         pts[..., 2] *= -1
     return {
         "id": move_id,
-        "fps": PREVIEW_FPS,
+        "fps": round(fps, 3),
         "bones": PREVIEW_BONES,
         "frames": np.round(pts, 3).tolist(),
     }

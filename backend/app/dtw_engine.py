@@ -32,6 +32,23 @@ FEATURES_PER_FRAME = 33 * 3
 DEFAULT_WINDOW_LEN = 60
 DEFAULT_DTW_THRESHOLD = 50.0
 
+# Joints compared by DTW: the 17 that AIST++ references actually contain
+# (nose, eyes, ears, shoulders, elbows, wrists, hips, knees, ankles). The
+# other 16 MediaPipe landmarks are empty in those references, so including
+# them would compare the dancer's hands and feet against zeros.
+COMPARE_JOINTS = [0, 2, 5, 7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
+
+
+def comparable(sequence: np.ndarray) -> np.ndarray:
+    """(T, 99) -> (T, 34): x and y of COMPARE_JOINTS only.
+
+    Depth is left out on purpose: MediaPipe's z from a single webcam is a
+    rough estimate, while AIST++ depth is measured, so comparing them adds
+    noise rather than signal.
+    """
+    seq = _ensure_2d(sequence).reshape(-1, 33, 3)
+    return seq[:, COMPARE_JOINTS, :2].reshape(seq.shape[0], -1)
+
 
 @dataclass(frozen=True)
 class ReferenceMove:
@@ -128,8 +145,8 @@ def dtw_distance(
     if fastdtw is None:
         raise ImportError("fastdtw is required. Install with: pip install fastdtw")
 
-    live = _ensure_2d(live)
-    reference = _ensure_2d(reference)
+    live = np.asarray(live, dtype=np.float32)
+    reference = np.asarray(reference, dtype=np.float32)
     distance, path = fastdtw(live, reference, dist=euclidean)
     return float(distance), path
 
@@ -137,7 +154,7 @@ def dtw_distance(
 def compare_to_move(live: np.ndarray, move: ReferenceMove) -> DTWResult:
     """Compare a live window to one reference move and test alignment."""
     live = _ensure_2d(live)
-    distance, path = dtw_distance(live, move.sequence)
+    distance, path = dtw_distance(comparable(live), comparable(move.sequence))
     n_live, n_ref = live.shape[0], move.num_frames
     normalized = distance / max(n_live, n_ref, 1)
 

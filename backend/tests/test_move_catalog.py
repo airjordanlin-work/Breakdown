@@ -101,3 +101,33 @@ def test_preview_includes_depth_per_joint(tmp_path):
     f = preview(tmp_path, "reach")["frames"][0]
     assert all(len(j) == 3 for j in f)
     assert f[5][2] != f[6][2]                    # left and right wrists at different depths
+
+
+def test_crouching_is_not_floor_but_sitting_is(tmp_path):
+    crouch = standing()
+    crouch[:, 0, 1] = 1.0                        # head bent down near hip level
+    sit = standing()
+    sit[:, [27, 28], 1] = -0.3                   # feet at hip level: hips on the ground
+    save(tmp_path, "crouch", crouch)
+    save(tmp_path, "sit", sit)
+    stats = {m.id: m.stats["floor"] for m in load_catalog(tmp_path)}
+    assert stats["crouch"] == 0
+    assert stats["sit"] == 100
+
+
+def test_empty_joints_never_count_as_lowest_point(tmp_path):
+    seq = standing()                             # unmapped joints are all 0 = hip level
+    save(tmp_path, "a", seq)
+    assert load_catalog(tmp_path)[0].stats["floor"] == 0
+
+
+def test_power_uses_real_duration(tmp_path):
+    save(tmp_path, "short", standing(arm_speed=0.2), duration_s=1.0)
+    save(tmp_path, "long", standing(arm_speed=0.2), duration_s=4.0)
+    stats = {m.id: m.stats["power"] for m in load_catalog(tmp_path)}
+    assert stats["short"] == 100 and stats["long"] == 25   # same motion, 4x the time
+
+
+def test_preview_plays_in_real_time(tmp_path):
+    save(tmp_path, "a", standing(), duration_s=2.0)
+    assert preview(tmp_path, "a")["fps"] == round((T - 1) / 2.0, 3)
