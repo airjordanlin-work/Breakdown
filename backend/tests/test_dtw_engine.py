@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from app.dtw_engine import (
+    COMPARE_JOINTS,
     DTWEngine,
     compare_to_move,
     flatten_sequence,
@@ -117,3 +118,19 @@ def test_engine_can_practice_a_single_move(tmp_path):
     assert [m.name for m in only.library] == ["b"]
     fallback = DTWEngine(tmp_path, only_move="nope")
     assert len(fallback.library) == 2
+
+
+def test_empty_reference_joints_are_ignored(tmp_path):
+    # AIST++ references only fill 17 joints. A live pose with real values in
+    # the other 16 (fingers, heels, mouth) must still match perfectly.
+    ref = _synthetic_move(20, seed=4).reshape(20, 33, 3)
+    live = ref.copy()
+    empty = [i for i in range(33) if i not in COMPARE_JOINTS]
+    ref[:, empty] = 0
+    live[:, empty] = 5.0
+    np.save(tmp_path / "m.npy", ref.reshape(20, -1))
+    with (tmp_path / "m_meta.json").open("w") as f:
+        json.dump({"dtw_threshold": 1e-3}, f)
+    result = compare_to_move(live.reshape(20, -1), load_reference_library(tmp_path)[0])
+    assert result.distance == pytest.approx(0.0, abs=1e-6)
+    assert result.aligned is True

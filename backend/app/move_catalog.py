@@ -16,6 +16,7 @@ Optional meta fields a move can set:
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -35,9 +36,15 @@ PREVIEW_BONES = [
     [1, 7], [2, 8], [7, 8],
     [7, 9], [9, 11], [8, 10], [10, 12],
 ]
-PREVIEW_FPS = 20
+PREVIEW_FPS = 20          # fallback when a move has no recorded duration
+DEFAULT_DURATION_S = 3.0  # assumed length for moves without duration_s in meta
 
-LOW_HEAD = 1.2        # head within this many hip-widths above the hips = low / on the floor
+LOW_HIPS = 1.6       # hips within this many hip-widths of the lowest body point = on the floor
+                     # (standing puts the hips about 3 hip-widths above the ankles)
+
+# Joints every reference actually contains; AIST++ leaves the rest empty (0),
+# and an empty joint must never count as the "lowest point" of the body.
+from app.dtw_engine import COMPARE_JOINTS as REAL_JOINTS  # noqa: E402
 HIDDEN_BY_DEFAULT = {"t_pose"}
 
 
@@ -90,15 +97,37 @@ def up_sign(seq: np.ndarray) -> float:
     return 1.0 if seq[:, NOSE, 1].mean() > seq[:, [L_AN, R_AN], 1].mean() else -1.0
 
 
-def measure(seq: np.ndarray) -> tuple[float, float, float]:
-    """(inversion fraction, floor fraction, raw power) for one sequence."""
+def _duration_seconds(value: Any) -> float:
+    try:
+        duration = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_DURATION_S
+    return duration if math.isfinite(duration) and duration > 0 else DEFAULT_DURATION_S
+
+
+def measure(seq: np.ndarray, duration_s: float = DEFAULT_DURATION_S) -> tuple[float, float, float]:
+    """(inversion fraction, floor fraction, raw power) for one sequence.
+
+    inversion: share of frames with the head below the hips.
+    floor:     share of frames with the hips close to the lowest body point,
+               i.e. sitting, in footwork, or in a freeze. Crouching or
+               bending forward doesn't count, since the legs still hold the
+               hips up.
+    power:     average speed of wrists and ankles in hip-widths per second,
+               using the clip's real duration.
+    """
     y_up = seq[..., 1] * up_sign(seq)
     head = y_up[:, NOSE]                          # hips are at 0 after normalization
-    inversion = float(np.mean(head < 0))          # head below the hips
-    floor = float(np.mean(head < LOW_HEAD))       # head low: crouched, floor, or inverted
+    inversion = float(np.mean(head < 0))
+    lowest = y_up[:, REAL_JOINTS].min(axis=1)
+    floor = float(np.mean(-lowest < LOW_HIPS))
     limbs = seq[:, [L_WR, R_WR, L_AN, R_AN], :2]
     speed = np.linalg.norm(np.diff(limbs, axis=0), axis=-1)
-    power = float(speed.mean()) if len(speed) else 0.0
+    distance = float(speed.mean()) * max(seq.shape[0] - 1, 1) if len(speed) else 0.0
+    power = distance / duration_s
+    # Even a positive finite duration can overflow the derived speed.
+    if not math.isfinite(power):
+        power = distance / DEFAULT_DURATION_S
     return inversion, floor, power
 
 
@@ -136,7 +165,7 @@ def load_catalog(reference_dir: Path) -> list[MoveInfo]:
             continue
 
         seq = _load(npy)
-        inversion, floor, power = measure(seq)
+        inversion, floor, power = measure(seq, _duration_seconds(meta.get("duration_s")))
         source = meta.get("source", "custom")
         moves.append(MoveInfo(
             id=npy.stem,
@@ -159,7 +188,7 @@ def load_catalog(reference_dir: Path) -> list[MoveInfo]:
     # Power is relative to the fastest move in the library, so it reads 0-100.
     top = max((m._power_raw for m in moves), default=0.0) or 1.0
     for m in moves:
-        m.stats = {"power": round(100 * m._power_raw / top), **m.stats}
+        m.stats = {"power": round(100 * (m._power_raw / top)), **m.stats}
         if m.difficulty_override:
             m.difficulty = str(m.difficulty_override).capitalize()
             m.difficulty_measured = False
@@ -196,6 +225,14 @@ def preview(reference_dir: Path, move_id: str) -> Optional[dict[str, Any]]:
     if not npy.exists() or "/" in move_id or ".." in move_id:
         return None
     seq = _load(npy)
+    meta_path = npy.with_name(f"{move_id}_meta.json")
+    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    duration = meta.get("duration_s")
+    # Real-time playback when the clip's length is known.
+    fps = ((seq.shape[0] - 1) / _duration_seconds(duration)
+           if "duration_s" in meta else PREVIEW_FPS)
+    if not math.isfinite(fps):
+        fps = (seq.shape[0] - 1) / DEFAULT_DURATION_S
     s = up_sign(seq)
     a = facing_angle(seq)
     joints = seq[:, PREVIEW_JOINTS, :]
@@ -213,7 +250,7 @@ def preview(reference_dir: Path, move_id: str) -> Optional[dict[str, Any]]:
         pts[..., 2] *= -1
     return {
         "id": move_id,
-        "fps": PREVIEW_FPS,
+        "fps": round(fps, 3),
         "bones": PREVIEW_BONES,
         "frames": np.round(pts, 3).tolist(),
     }

@@ -29,5 +29,10 @@
         }
       ]
     }
-  ]
+  ],
+  "coords_version": 2,
+  "source_fps": 60.0,
+  "clip_start_s": 0.183,
+  "duration_s": 3.0,
+  "original_frames": 720
 }
