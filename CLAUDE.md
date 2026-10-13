@@ -45,7 +45,11 @@ Use the project venv (`source .venv/bin/activate`) or `python3`.
 8. **Degrade, don't crash.** Every external call (LLM, STT, TTS) needs a timeout and a templated fallback.
 9. **No em-dashes** in docs and README text. Keep prose plain and direct.
 10. **Stop and say so** when a task needs something you cannot do in the cloud: a Mac with a webcam, an iPhone, BLE hardware, `afplay`, or a real microphone. Prepare the code and tests, list the exact manual steps for Jordan, and stop. Do not fake results.
-
+11. Model check. Do not suggest a model switch during M1 or M2. Starting at M3, before working on any of these, stop and tell Jordan to switch the thread to Opus, then wait for confirmation:
+    - the voice orchestrator (turn-taking, speech queueing, barge-in)
+    - grounding and tool-calling logic for the coach
+    - debugging a problem that spans WebSocket, STT, LLM and TTS
+    Everything else stays on the current model with no comment.
 ## Definition of done
 
 - Code runs, `pytest` passes locally, CI green.
