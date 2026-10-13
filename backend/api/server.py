@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -128,8 +129,16 @@ def _imu_payload(captured_at: float) -> dict:
     return status
 
 
+class SessionClosed(Exception):
+    """The session was ended (DELETE /session) while its socket was still sending frames."""
+
+
 class CoachingSession:
     def __init__(self, config: SessionConfig) -> None:
+        # close() and frame processing run on different threads; this lock keeps
+        # close() from tearing down the estimator or DTW pool mid-frame.
+        self._lock          = threading.Lock()
+        self.closed         = False
         self.estimator      = PoseEstimator(model_complexity=1)
         self.buf            = PoseBuffer()
         self.engine         = DTWEngine(REFERENCE_DIR, only_move=config.move_id)
@@ -156,6 +165,12 @@ class CoachingSession:
         frame. It uses the same clock as the IMU bridge, so the two streams can
         be lined up. Falls back to arrival time for older frontends.
         """
+        with self._lock:
+            if self.closed:
+                raise SessionClosed()
+            return self._process_frame(b64, captured_at)
+
+    def _process_frame(self, b64: str, captured_at: Optional[float]) -> dict:
         captured_at = captured_at if captured_at is not None else time.time()
         self.last_captured_at = captured_at
 
@@ -276,8 +291,49 @@ class CoachingSession:
         }
 
     def close(self) -> None:
-        self.estimator.close()
-        self.engine.shutdown()
+        with self._lock:
+            if self.closed:
+                return
+            self.closed = True
+            self.estimator.close()
+            self.engine.shutdown()
+
+
+def voice_status(voice: Optional[VoiceCoach]) -> dict:
+    """Whether this session can speak, and why not. Sent once when the socket opens."""
+    if voice is None:
+        return {"type": "voice_status", "available": False, "reason": "no voice for this session"}
+    if not voice.available:
+        reason = getattr(voice, "unavailable_reason", None) or "TTS unavailable"
+        return {"type": "voice_status", "available": False, "reason": reason}
+    return {"type": "voice_status", "available": True, "reason": None}
+
+
+def warm_up_voice(voice: Optional[VoiceCoach]) -> None:
+    """Run one throwaway synth so the first real cue does not pay Kokoro's cold start.
+
+    On slower CPUs the first synth can take longer than TTS_TIMEOUT_SECONDS,
+    which would drop the first cue's audio. Logs how long it took either way.
+    """
+    if voice is None or not voice.available:
+        reason = voice_status(voice)["reason"]
+        print(f"VoiceCoach: COACH AUDIO OFF ({reason}). Captions only this session.")
+        return
+    start = time.perf_counter()
+    wav = voice.synthesize_wav("Ready")
+    ms = (time.perf_counter() - start) * 1000
+    if wav:
+        print(f"VoiceCoach: warm-up synth took {ms:.0f} ms (cue timeout is {TTS_TIMEOUT_SECONDS:.0f} s)")
+    else:
+        print(f"VoiceCoach: warm-up synth FAILED after {ms:.0f} ms; cues will be captions only")
+
+
+async def _audio_skipped(websocket: WebSocket, turn_id: str, cue: str, reason: str) -> bool:
+    print(f"TTS skipped ({reason}), sent caption only: '{cue}'")
+    await websocket.send_text(json.dumps(
+        {"type": "coach_audio_skipped", "turn_id": turn_id, "reason": reason}
+    ))
+    return False
 
 
 async def send_coach_cue(
@@ -289,24 +345,28 @@ async def send_coach_cue(
     """Send a coach cue to the client: caption text first, then the spoken audio.
 
     Text goes first so the caption shows even when TTS is slow, missing or
-    fails. Returns True if audio was sent.
+    fails. When there is no audio, a coach_audio_skipped message says why, so
+    the client can show it. Returns True if audio was sent.
     """
     turn_id = uuid.uuid4().hex[:12]
     await websocket.send_text(json.dumps({"type": "coach_cue", "cue": cue, "turn_id": turn_id}))
 
-    if voice is None or not voice.available:
-        return False
+    status = voice_status(voice)
+    if not status["available"]:
+        return await _audio_skipped(websocket, turn_id, cue, status["reason"])
     loop = asyncio.get_running_loop()
+    start = time.perf_counter()
     try:
         wav = await asyncio.wait_for(
             loop.run_in_executor(_tts_executor, voice.synthesize_wav, cue), timeout
         )
     except asyncio.TimeoutError:
-        print(f"TTS timed out after {timeout}s, sent text only: '{cue}'")
-        return False
+        return await _audio_skipped(websocket, turn_id, cue, f"TTS timed out after {timeout:g} s")
     if not wav:
-        return False
+        return await _audio_skipped(websocket, turn_id, cue, "TTS synth failed, see log above")
     await websocket.send_bytes(encode_audio_chunk(turn_id, wav))
+    ms = (time.perf_counter() - start) * 1000
+    print(f"TTS sent {len(wav)} bytes in {ms:.0f} ms: '{cue}'")
     return True
 
 
@@ -331,15 +391,18 @@ async def get_move_preview(move_id: str):
 @app.post("/session/start")
 async def start_session(config: SessionConfig):
     sid = str(uuid.uuid4())
-    _sessions[sid] = CoachingSession(config)
+    session = CoachingSession(config)
+    _sessions[sid] = session
+    _tts_executor.submit(warm_up_voice, session.voice)
     return {"session_id": sid}
 
 
 @app.delete("/session/{session_id}")
 async def end_session(session_id: str):
-    if session_id in _sessions:
-        _sessions[session_id].close()
-        del _sessions[session_id]
+    session = _sessions.pop(session_id, None)
+    if session is not None:
+        # run off the event loop: close() waits for an in-flight frame to finish
+        await asyncio.get_running_loop().run_in_executor(_executor, session.close)
     return {"status": "closed"}
 
 
@@ -374,6 +437,7 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
         return
 
     loop = asyncio.get_running_loop()
+    await websocket.send_text(json.dumps(voice_status(session.voice)))
 
     try:
         while True:
@@ -382,9 +446,14 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
 
             if msg.get("type") == "frame":
                 # run pose pipeline in thread pool
-                payload = await loop.run_in_executor(
-                    _executor, session.process_frame_sync, msg["data"], msg.get("t")
-                )
+                try:
+                    payload = await loop.run_in_executor(
+                        _executor, session.process_frame_sync, msg["data"], msg.get("t")
+                    )
+                except SessionClosed:
+                    # END SESSION raced a frame still in flight; close cleanly
+                    await websocket.close(code=1000)
+                    return
 
                 # extract coach context then remove from payload
                 coach_ctx = payload.pop("_coach_context", {})

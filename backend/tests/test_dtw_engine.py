@@ -134,3 +134,26 @@ def test_empty_reference_joints_are_ignored(tmp_path):
     result = compare_to_move(live.reshape(20, -1), load_reference_library(tmp_path)[0])
     assert result.distance == pytest.approx(0.0, abs=1e-6)
     assert result.aligned is True
+
+
+def test_compare_async_after_shutdown_returns_none(tmp_path):
+    # Regression: a frame racing END SESSION used to raise
+    # "cannot schedule new futures after shutdown" and kill the WebSocket.
+    seq = _synthetic_move(60)
+    np.save(tmp_path / "windmill.npy", seq)
+    engine = DTWEngine(tmp_path, window_len=60)
+    window = [seq[i].reshape(33, 3) for i in range(60)]
+    engine.shutdown()
+    assert engine.closed
+    assert engine.compare_async(window) is None
+
+
+def test_compare_async_survives_executor_shut_down_elsewhere(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    seq = _synthetic_move(60)
+    np.save(tmp_path / "windmill.npy", seq)
+    pool = ThreadPoolExecutor(max_workers=1)
+    engine = DTWEngine(tmp_path, window_len=60, executor=pool)
+    pool.shutdown()
+    window = [seq[i].reshape(33, 3) for i in range(60)]
+    assert engine.compare_async(window) is None

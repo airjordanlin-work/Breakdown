@@ -321,6 +321,8 @@ Client to server:
 
 Server to client:
 - `coach_cue {cue, turn_id}` (EXISTS). Caption text, sent before the matching `coach_audio_chunk`, so it still shows if TTS fails or times out.
+- `voice_status {available, reason}` (EXISTS). Sent once when the socket opens. `reason` says why coach audio is off (for example the Kokoro model file is missing); the UI shows it.
+- `coach_audio_skipped {turn_id, reason}` (EXISTS). Sent after a `coach_cue` caption when no audio follows (TTS missing, timed out or failed).
 - `state {phase, move_id, attempt_id?}`
 - `stt_partial {turn_id, text}` / `stt_final {turn_id, text}`
 - `coach_turn_start {turn_id, mode}`

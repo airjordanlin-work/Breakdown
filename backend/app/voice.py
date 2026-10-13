@@ -65,26 +65,33 @@ class VoiceCoach:
         self._synth_lock         = threading.Lock()   # Kokoro is not shared across threads
         self._kokoro             = None
         self._available          = False
+        # Why TTS is off, shown in the server log and the client UI. None when ready.
+        self.unavailable_reason: str | None = "not loaded"
         self._recent: list[str]  = []   # tracks recently used phrases to avoid repetition
 
         try:
             from kokoro_onnx import Kokoro
             if not MODEL_PATH.exists():
+                self.unavailable_reason = f"Kokoro model file missing: {MODEL_PATH.name}"
                 print(f"VoiceCoach: model not found at {MODEL_PATH}")
                 print("  Run: curl -L -o kokoro-v1.0.onnx https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx")
                 return
             if not VOICES_PATH.exists():
+                self.unavailable_reason = f"Kokoro voices file missing: {VOICES_PATH.name}"
                 print(f"VoiceCoach: voices not found at {VOICES_PATH}")
                 print("  Run: curl -L -o voices-v1.0.bin https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin")
                 return
 
             self._kokoro    = Kokoro(str(MODEL_PATH), str(VOICES_PATH))
             self._available = True
+            self.unavailable_reason = None
             print(f"VoiceCoach: ready — {gender} voice ({VOICE_MAP[gender]})")
 
         except ImportError:
+            self.unavailable_reason = "kokoro-onnx is not installed"
             print("VoiceCoach: kokoro-onnx not installed — run: pip install kokoro-onnx soundfile")
         except Exception as e:
+            self.unavailable_reason = f"Kokoro failed to load: {e}"
             print(f"VoiceCoach: failed to load — {e}")
 
     def _pick(self, phrases: list[str]) -> str:

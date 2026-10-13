@@ -226,6 +226,7 @@ class DTWEngine:
             if chosen:
                 self._library = chosen
         self._last_result: Optional[DTWResult] = None
+        self._closed = False
 
     @property
     def library(self) -> list[ReferenceMove]:
@@ -271,8 +272,12 @@ class DTWEngine:
         return result
 
     def compare_async(self, window: list[np.ndarray]) -> Optional[Future[DTWResult]]:
-        """Submit DTW to the worker pool; returns None if the window is not ready."""
-        if not self.is_ready(window):
+        """Submit DTW to the worker pool.
+
+        Returns None if the window is not ready or the engine was shut down,
+        so a frame that races a session ending is skipped instead of crashing.
+        """
+        if self._closed or not self.is_ready(window):
             return None
 
         live = flatten_sequence(window[-self.window_len :])
@@ -284,7 +289,16 @@ class DTWEngine:
             self._last_result = result
             return result
 
-        return self._executor.submit(_run)
+        try:
+            return self._executor.submit(_run)
+        except RuntimeError:
+            # executor shut down between the check above and the submit
+            return None
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     def shutdown(self) -> None:
+        self._closed = True
         self._executor.shutdown(wait=False)
