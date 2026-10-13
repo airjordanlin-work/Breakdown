@@ -1,6 +1,7 @@
 """The frame payload carries this frame's own visibility, not the last good one."""
 
 import base64
+import threading
 from types import SimpleNamespace
 
 import cv2
@@ -36,6 +37,8 @@ class ScriptedEstimator:
 def make_session(poses) -> CoachingSession:
     # Skip __init__ so the test never loads MediaPipe or the reference library.
     s = CoachingSession.__new__(CoachingSession)
+    s._lock = threading.Lock()
+    s.closed = False
     s.estimator = ScriptedEstimator(poses)
     s.buf = PoseBuffer()
     s.engine = SimpleNamespace(move_name=None)
