@@ -49,8 +49,11 @@ REFERENCE_DIR  = Path(__file__).resolve().parent.parent / "reference_moves"
 KEYFRAME_FLASH = 30
 _sessions: dict[str, "CoachingSession"] = {}
 _executor      = ThreadPoolExecutor(max_workers=4)
-# TTS gets its own single worker so a slow synth never steals a pose-frame slot.
-_tts_executor  = ThreadPoolExecutor(max_workers=1)
+# TTS gets its own small pool so a slow synth never steals a pose-frame slot.
+# Two workers let two sessions synthesize at once; each VoiceCoach serializes
+# its own Kokoro calls. The timeout below includes queue time on purpose: audio
+# that arrives after the deadline is stale for a live cue.
+_tts_executor  = ThreadPoolExecutor(max_workers=2)
 TTS_TIMEOUT_SECONDS = 5.0
 
 # One shared IMU store for the whole server: there's one physical device.

@@ -14,7 +14,7 @@ It started as a personal problem. Practicing alone means nobody tells you if you
 - **Compares your movement to reference moves** with Dynamic Time Warping, so doing a move slower or faster than the reference still lines up
 - **Scores keyframes** by joint angle, with per-joint feedback and a combo system
 - **Grades freezes with wearable IMUs:** hold time, a 0 to 100 stability score, and which limb wobbled most
-- **Coaches out loud:** Claude Haiku turns the measured data into short cues, voiced with Kokoro TTS on the server and streamed to the browser over the WebSocket, so they play on a phone too
+- **Coaches out loud:** Claude Haiku turns the measured data into short cues, voiced with Kokoro TTS on the server and streamed to the browser over the WebSocket for playback
 - **Fuses camera and sensors:** the IMUs cover what the camera can't see well (inversions, overlapping limbs), and the camera rules out false freezes
 
 ---

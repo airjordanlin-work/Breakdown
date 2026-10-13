@@ -15,6 +15,7 @@ export function decodeAudioChunk(buf) {
 export function useCoachAudio() {
   const ctxRef     = useRef(null);
   const sourceRef  = useRef(null);
+  const latestTurn = useRef(null);   // turn_id of the newest caption
   const [unlocked, setUnlocked] = useState(false);
 
   const unlock = useCallback(async () => {
@@ -31,6 +32,10 @@ export function useCoachAudio() {
     setUnlocked(ctx.state === "running");
   }, []);
 
+  // Call with each coach_cue caption's turn_id so audio for an older cue is
+  // dropped instead of playing under a newer caption.
+  const setLatestTurn = useCallback((turnId) => { latestTurn.current = turnId; }, []);
+
   const playChunk = useCallback(async (buf) => {
     const ctx = ctxRef.current;
     if (!ctx || ctx.state !== "running") return;
@@ -42,8 +47,11 @@ export function useCoachAudio() {
       return;
     }
     if (header.type !== "coach_audio_chunk" || header.codec !== "wav") return;
+    const isStale = () => latestTurn.current && header.turn_id !== latestTurn.current;
+    if (isStale()) return;
     try {
       const audio = await ctx.decodeAudioData(payload);
+      if (isStale()) return;   // a newer cue arrived while this one decoded
       // Newest cue wins: cues are short and already rate-limited server-side.
       try { sourceRef.current?.stop(); } catch { /* already stopped */ }
       const src = ctx.createBufferSource();
@@ -58,5 +66,5 @@ export function useCoachAudio() {
 
   useEffect(() => () => { ctxRef.current?.close(); }, []);
 
-  return { unlocked, unlock, playChunk };
+  return { unlocked, unlock, playChunk, setLatestTurn };
 }

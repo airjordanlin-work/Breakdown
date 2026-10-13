@@ -44,4 +44,13 @@ def decode_audio_chunk(frame: bytes) -> tuple[dict, bytes]:
         header = json.loads(frame[_LEN.size:end].decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
         raise AudioFrameError(f"bad header: {e}") from e
+    if not (
+        isinstance(header, dict)
+        and header.get("type") == AUDIO_CHUNK_TYPE
+        and isinstance(header.get("turn_id"), str)
+        and isinstance(header.get("seq"), int) and not isinstance(header.get("seq"), bool)
+        and isinstance(header.get("codec"), str)
+        and isinstance(header.get("final"), bool)
+    ):
+        raise AudioFrameError(f"header does not match {AUDIO_CHUNK_TYPE}: {header!r}")
     return header, frame[end:]

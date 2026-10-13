@@ -74,7 +74,18 @@ def test_audio_chunk_header_length_is_big_endian_prefix():
     assert len(frame) == 2 + n
 
 
-@pytest.mark.parametrize("frame", [b"", b"\x00", b"\x00\x10{}", b"\x00\x02\xff\xfe"])
+def _frame_with_header(raw: bytes) -> bytes:
+    return len(raw).to_bytes(2, "big") + raw + b"audio"
+
+
+@pytest.mark.parametrize("frame", [
+    b"", b"\x00", b"\x00\x10{}", b"\x00\x02\xff\xfe",
+    _frame_with_header(b"null"),
+    _frame_with_header(b"[1,2]"),
+    _frame_with_header(b'{"type":"coach_audio_chunk"}'),
+    _frame_with_header(b'{"type":"other","turn_id":"t","seq":0,"codec":"wav","final":true}'),
+    _frame_with_header(b'{"type":"coach_audio_chunk","turn_id":"t","seq":"0","codec":"wav","final":true}'),
+])
 def test_decode_rejects_malformed_frames(frame):
     with pytest.raises(AudioFrameError):
         decode_audio_chunk(frame)

@@ -33,8 +33,15 @@ export default function Session({ sessionId, onEnd }) {
     onEnd();
   };
 
+  // Coach audio comes from the backend over the WebSocket.
+  const { unlocked: soundOn, unlock: unlockSound, playChunk, setLatestTurn } = useCoachAudio();
+
   const handleMessage = useCallback((msg) => {
-    if (msg.type === "coach_cue") { setCoachCue(msg.cue); return; }
+    if (msg.type === "coach_cue") {
+      setCoachCue(msg.cue);
+      setLatestTurn(msg.turn_id);
+      return;
+    }
     if (msg.type !== "frame") return;
     if (msg.freeze) {
       setFreezeLive(msg.freeze.live);
@@ -54,12 +61,10 @@ export default function Session({ sessionId, onEnd }) {
     if (msg.guidance    !== undefined)  setGuidance(msg.guidance);
     if (msg.stats)                      setStats(msg.stats);
     if (msg.score_result)               setScoreResult(msg.score_result);
-  }, []);
+  }, [setLatestTurn]);
 
-  // Coach audio comes from the backend over the WebSocket. Browsers (iOS
-  // Safari above all) need a tap before they play sound, so try to unlock on
-  // mount and on any tap, and show a SOUND button until it works.
-  const { unlocked: soundOn, unlock: unlockSound, playChunk } = useCoachAudio();
+  // Browsers (iOS Safari above all) need a tap before they play sound, so try
+  // to unlock on mount and on any tap, and show a SOUND button until it works.
   useEffect(() => {
     unlockSound().catch(() => {});
     if (soundOn) return;
