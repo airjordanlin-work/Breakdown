@@ -1,0 +1,402 @@
+# Breakdown: Product Spec
+
+Status: draft v1. Place at `docs/PRODUCT_SPEC.md`. Items marked EXISTS are in the repo today. Items marked PROPOSED are not built.
+
+## 1. Goal
+
+Build a phone-first, voice-conversational breakdance coach that watches a dancer practice through the phone camera and talks with them the way a good human coach would: short live cues while they move, a debrief when they stop, and open conversation about technique, goals and progress whenever they want.
+
+The product must work with hardware everyone already owns (one phone, no purchase). Wearable IMUs are an optional later accessory that improves accuracy, never a requirement.
+
+### Success looks like
+
+- A new user opens a link on an iPhone, props the phone up, picks a move, and gets spoken feedback within 10 minutes with no setup beyond camera and mic permission.
+- The coach feels like a person: it listens, answers questions, remembers last week, and never talks over the dancer.
+- Every concrete claim the coach makes about the dancer's body or score is traceable to measured data (grounded). It says "I'm not sure" instead of inventing.
+- Numbers are measured and published: latency, cue grounding rate, frame rate, cost per session.
+
+### Principles
+
+1. Grounded over fluent. The LLM phrases facts, it does not invent them.
+2. Phone first. Every feature is judged on whether it works on a mid-range phone.
+3. Human feel is a latency and turn-taking problem as much as a wording problem.
+4. Privacy by default. Prefer sending landmarks, not video.
+5. Measure before claiming. No metric goes in the README or resume without a reproducible script.
+
+### Non-goals (for now)
+
+- Competitive judging or scoring against other dancers.
+- Native iOS/Android apps (web/PWA first).
+- Multi-person tracking.
+- Moves beyond the starter catalog until the loop is proven.
+- Medical or injury-diagnosis claims.
+
+## 2. Current state (as of Oct 2026)
+
+| Area | State |
+|---|---|
+| Pose | MediaPipe Pose, 33 landmarks, hip-center and torso-scale normalization (EXISTS) |
+| Buffer | 60-frame deque (EXISTS) |
+| Matching | fastdtw against AIST++ references, per-move `dtw_threshold`; keyframe joint-angle scorer (EXISTS) |
+| Coaching | Claude Haiku generates a text cue from DTW and scorer output; one-way, no user input (EXISTS) |
+| Voice out | Kokoro ONNX TTS, played on the server via `afplay` (EXISTS, **does not reach a phone**) |
+| Voice in | None (PROPOSED) |
+| Transport | FastAPI REST plus WebSocket (EXISTS) |
+| Frontend | React/Vite (EXISTS) |
+| Sessions | In-memory only, nothing persists (EXISTS) |
+| Hardware | ESP32-S3 + 2x MPU-6050 over BLE, 32-byte packet, freeze monitor (EXISTS, prototype) |
+| Quality | Pytest, GitHub Actions CI, Docker, benchmark harness (EXISTS) |
+| Measured | Haiku cue latency about 0.6 s median, p95 0.72 s, 0 failures in 40 calls (EXISTS) |
+| Unmeasured | End-to-end fps on phone, real pose-stage fps (the 30fps resume claim is unverified), cue grounding rate |
+
+Key gap: because TTS plays through `afplay` on the server, testing from a phone shows text cues but no audio. Audio must be streamed to the client (see M1).
+
+## 3. The conversational coach
+
+### 3.1 Interaction modes
+
+1. **Live cue mode.** While the dancer is moving. Very short (under 8 words), at most one cue per attempt window, never during a freeze or mid-rotation unless safety related. Triggered by the system, not by the user.
+2. **Debrief mode.** Right after an attempt ends (motion stops for N ms). The coach gives a 1 to 3 sentence read on what happened, grounded in that attempt's data, and may ask one question ("Did that feel off the left side?").
+3. **Open conversation mode.** The user speaks any time they are not mid-move: "why does my freeze keep collapsing?", "what should I work on this week?", "show me an easier version". The coach answers conversationally, can pull data via tools, and can change the practice plan.
+
+### 3.2 Turn-taking and voice behavior
+
+- Default input is **push-to-talk** (hold a button) because breakdance music and floor noise make always-on listening unreliable. Hands-free with voice activity detection is a later option.
+- **Barge-in:** if the user starts speaking while the coach is talking, TTS stops within 300 ms and the coach yields.
+- **Never talk over motion.** Spoken output is queued while the dancer is mid-move and delivered at the next pause, unless it is a safety cue.
+- Spoken replies are short by default (under 25 words in live and debrief, under 60 in open conversation) and use spoken language, not written language.
+- Coach confirms understanding of corrections ("got it, left hip higher") rather than lecturing.
+- Filler and acknowledgement sounds are allowed ("mm", "nice") only if they are instant and do not block the real answer.
+
+### 3.3 Human-likeness checklist
+
+- Natural, varied phrasing; no repeating the same cue twice in a row (repetition metric tracked).
+- Consistent persona voice and tone (see personas).
+- References earlier turns and earlier sessions ("last week your toprock was cleaner on the left").
+- Asks at most one question at a time.
+- Admits uncertainty and limits ("my camera can't see your feet in that pose").
+- Adapts level: beginner gets simple language, advanced gets terminology.
+- Latency feels like a person: first audio within about 1.5 s of the user finishing speaking (target, see NFR).
+
+### 3.4 Personas (PROPOSED)
+
+Selectable coach personalities (for example "Hype", "Technical", "Calm"). A persona is a system-prompt fragment plus a TTS voice id plus verbosity settings. Personas change style only, never facts.
+
+### 3.5 Memory (PROPOSED)
+
+- Short-term: current session transcript and last N attempts.
+- Long-term: per-user `coach_memory` entries (goals, recurring faults, injuries/limitations the user states, preferences). The coach writes memory through a tool, and the user can view and delete it.
+
+### 3.6 Grounding contract
+
+The model must not state a body-position fact, score, or progress claim unless it came from a tool result or the provided `facts` block for that turn. Implementation:
+
+- Each turn gets a `facts` JSON block (current move, last attempt scores, joint deviations, freeze events, recent history).
+- The model can call tools: `get_recent_attempts`, `get_move_info`, `get_progress`, `set_practice_move`, `save_note`.
+- Output is checked by a grounding heuristic (extends `_grounding_flags` in `benchmark_pipeline.py`); flagged turns are logged and measured.
+- Safe fallback: if the model fails or times out, speak a templated cue from the scorer output.
+
+### 3.7 Safety
+
+- Never give medical diagnoses. For pain or injury, advise stopping and seeing a professional.
+- Encourage warm-up and safe space; refuse to coach risky progressions (for example power moves) without prerequisites when the data shows instability.
+- Do not store audio or video by default.
+
+## 4. Functional requirements
+
+Priority: P0 must for demo, P1 should, P2 later.
+
+### Capture and pose
+- FR-1 (P0) Capture camera in browser (iOS Safari, Android Chrome) over HTTPS.
+- FR-2 (P0) Run pose estimation and stream landmarks (server-side now, client-side later).
+- FR-3 (P1) Show a live skeleton overlay and a "frame the whole body" guide before starting.
+- FR-4 (P2) Client-side MediaPipe Web that sends landmarks only.
+
+### Move matching and scoring
+- FR-5 (P0) Select a move from the catalog and compare live motion to its reference with DTW.
+- FR-6 (P0) Keyframe joint-angle scoring with per-joint deviations.
+- FR-7 (P1) Attempt segmentation: detect attempt start and end automatically.
+- FR-8 (P1) Freeze detection and hold timing.
+- FR-9 (P2) IMU fusion for legs and floor moves.
+
+### Conversation
+- FR-10 (P0) Coach speaks cues to the phone (audio streamed to client).
+- FR-11 (P0) User can speak to the coach with push-to-talk and hear a reply.
+- FR-12 (P0) Coach answers using grounded facts and tools.
+- FR-13 (P1) Barge-in interrupts coach speech.
+- FR-14 (P1) Debrief after each attempt.
+- FR-15 (P1) Text chat fallback with the same coach logic.
+- FR-16 (P1) Personas and voice selection.
+- FR-17 (P1) Cross-session memory with view and delete.
+- FR-18 (P2) Hands-free mode with VAD.
+- FR-19 (P2) Coach can propose and run a multi-step practice plan.
+
+### Accounts and data
+- FR-20 (P1) Anonymous sessions by default, optional account for history.
+- FR-21 (P1) Persist sessions, attempts and coach turns.
+- FR-22 (P1) Progress view (trend per move, per joint).
+- FR-23 (P1) Export or delete all user data.
+
+### Developer and evaluation
+- FR-24 (P0) Benchmark harness covers dtw, pose, coach stages (EXISTS) plus voice round trip (PROPOSED).
+- FR-25 (P1) Labeled cue set for grounding evaluation.
+- FR-26 (P1) Replay mode: run a recorded landmark stream through the pipeline offline.
+
+## 5. Non-functional requirements
+
+| ID | Area | Requirement | Target |
+|---|---|---|---|
+| NFR-1 | Latency | LLM cue (Haiku) | median under 1 s, p95 under 1.5 s (measured 0.6 / 0.72 s) |
+| NFR-2 | Latency | Voice to voice (user stops talking to first coach audio) | median under 1.5 s, p95 under 2.5 s |
+| NFR-3 | Latency | Barge-in stop time | under 300 ms |
+| NFR-4 | Performance | Pose/landmark rate on iPhone 12 or newer | at least 24 fps sustained, goal 30 |
+| NFR-5 | Performance | Overlay/UI frame time | no dropped UI frames from audio |
+| NFR-6 | Cost | LLM + STT + TTS per 10-minute session | under $0.10 (verify Haiku pricing assumption) |
+| NFR-7 | Privacy | Raw video/audio leave device | no by default; landmarks and transcripts only |
+| NFR-8 | Privacy | Data retention | transcripts 90 days default, user deletable |
+| NFR-9 | Reliability | LLM/STT/TTS failure | degrade to templated text cue, no crash, session continues |
+| NFR-10 | Reliability | WebSocket drop | auto reconnect with session resume within 5 s |
+| NFR-11 | Quality | Cue grounding rate | at least 95% of cues contain no ungrounded claim |
+| NFR-12 | Quality | Repetition | no identical cue twice in a row |
+| NFR-13 | Quality | Talk-over rate | under 2% of coach utterances overlap detected motion (non-safety) |
+| NFR-14 | Quality | STT word error rate with music at moderate volume | measured and published, target under 15% on coaching vocabulary |
+| NFR-15 | Compatibility | iOS Safari 16+, Android Chrome current | required |
+| NFR-16 | Battery | 10-minute session | under 15% battery on a recent phone |
+| NFR-17 | Accessibility | Captions for all spoken coach output, adjustable text size | required |
+| NFR-18 | Observability | Per-turn latency breakdown (STT, LLM, TTS), logs without PII | required |
+| NFR-19 | Testability | Core pipeline testable offline from recorded landmarks, CI green | required |
+| NFR-20 | Security | Secrets never in repo; rate limit WebSocket; auth for persisted data | required |
+
+## 6. Architecture
+
+### 6.1 Target (PROPOSED)
+
+```mermaid
+flowchart LR
+  subgraph Phone[Phone browser / PWA]
+    CAM[Camera] --> POSE[MediaPipe Web\n(later; server-side first)]
+    MIC[Mic push-to-talk] --> ENC[Audio encoder]
+    PLAY[Audio player\n(user-gesture unlocked)]
+    UI[React UI + captions]
+  end
+  POSE -- landmarks --> WS
+  ENC -- audio chunks --> WS
+  UI -- text --> WS
+  WS[WebSocket gateway\nFastAPI] --> ORCH[Coach orchestrator]
+  ORCH --> STT[Speech to text]
+  ORCH --> LLM[Claude Haiku + tools]
+  LLM --> TOOLS[get_recent_attempts / get_move_info /\nget_progress / set_practice_move / save_note]
+  ORCH --> TTS[Text to speech\nstreaming]
+  TTS -- audio chunks --> WS
+  WS --> PLAY
+  WS --> PIPE[Pose buffer, DTW, scorer, freeze monitor]
+  PIPE --> ORCH
+  ORCH --> DB[(Postgres)]
+  IMU[ESP32 IMUs over BLE\n(optional, later)] --> PIPE
+```
+
+### 6.2 Decision log
+
+| Decision | Choice now | Revisit when |
+|---|---|---|
+| Client | Mobile web/PWA | Web audio or camera limits block the demo |
+| Pose location | Server-side first, client-side later | Server fps or bandwidth is the bottleneck |
+| Talk model | Push-to-talk | Hands-free is requested and STT with music is solid |
+| STT | OPEN: browser SpeechRecognition vs hosted API vs Whisper-class model | After M2 measurements and cost review |
+| TTS | OPEN: keep Kokoro but stream chunks to client, or hosted streaming TTS | After voice-to-voice latency measurement |
+| LLM | Claude Haiku for live and debrief; stronger model optional for open conversation | Quality problems in open chat |
+| DB | Postgres (Supabase fits his existing stack) | If needs stay tiny, SQLite for dev |
+| Hardware | Optional accessory after phone works | Phone accuracy plateaus on legs/floor moves |
+
+## 7. Data model
+
+Postgres. UUID primary keys. All timestamps `timestamptz`. Row level security so a user only reads their own rows.
+
+```sql
+users (
+  id uuid pk, created_at, display_name text null,
+  level text check (level in ('beginner','intermediate','advanced')),
+  persona_id uuid null references coach_personas(id),
+  settings jsonb default '{}'   -- voice, verbosity, ptt vs handsfree, units
+);
+
+coach_personas (
+  id uuid pk, name text unique, system_prompt text,
+  tts_voice text, verbosity int, created_at
+);
+
+moves (
+  id text pk,                   -- e.g. 'six_step'
+  name text, category text,     -- toprock, footwork, freeze, power
+  difficulty int, description text,
+  dtw_threshold real, reference_path text,
+  prerequisites text[]
+);
+
+move_keyframes (
+  id uuid pk, move_id text references moves(id),
+  idx int, label text, joint_angles jsonb,   -- {left_knee: 92.0, ...}
+  tolerance jsonb
+);
+
+sessions (
+  id uuid pk, user_id uuid references users(id),
+  started_at, ended_at null,
+  device jsonb,                 -- ua, platform, camera res, measured fps
+  source text check (source in ('webcam','phone','imu','fusion')),
+  summary jsonb null
+);
+
+attempts (
+  id uuid pk, session_id uuid references sessions(id),
+  move_id text references moves(id),
+  started_at, ended_at,
+  dtw_distance real, dtw_threshold real, passed boolean,
+  overall_score real,
+  landmark_blob_path text null  -- off by default (privacy)
+);
+
+attempt_joint_results (
+  attempt_id uuid references attempts(id), joint text,
+  deviation_deg real, direction text, primary key (attempt_id, joint)
+);
+
+freezes (
+  id uuid pk, attempt_id uuid references attempts(id),
+  start_ms int, duration_ms int, stability real
+);
+
+coach_turns (
+  id uuid pk, session_id uuid references sessions(id),
+  attempt_id uuid null references attempts(id),
+  mode text check (mode in ('live','debrief','conversation')),
+  role text check (role in ('user','coach')),
+  text text,
+  facts jsonb,                  -- exact facts given to the model
+  tool_calls jsonb,             -- tools called and results
+  latency jsonb,                -- {stt_ms, llm_first_token_ms, tts_first_audio_ms, total_ms}
+  interrupted boolean default false,
+  tokens_in int, tokens_out int, cost_usd numeric(10,6),
+  grounding_flags jsonb null,
+  created_at
+);
+
+coach_memory (
+  id uuid pk, user_id uuid references users(id),
+  kind text check (kind in ('goal','fault','limitation','preference','note')),
+  content text, move_id text null, source_turn_id uuid null,
+  created_at, updated_at, deleted_at null
+);
+
+progress_snapshots (
+  id uuid pk, user_id uuid references users(id), move_id text references moves(id),
+  day date, attempts int, pass_rate real, mean_score real,
+  worst_joint text null, unique (user_id, move_id, day)
+);
+
+eval_cue_labels (
+  id uuid pk, coach_turn_id uuid references coach_turns(id),
+  grounded boolean, labeler text, notes text, created_at
+);
+```
+
+Notes:
+- Pose frames and audio are **not persisted** by default. If a user opts in, store landmark blobs in object storage and reference by path.
+- `facts` and `tool_calls` are stored so any cue can be audited and used for eval.
+- Indexes: `attempts(session_id, started_at)`, `coach_turns(session_id, created_at)`, `coach_memory(user_id, kind)`.
+- Retention job deletes `coach_turns` older than the retention window unless exported.
+
+## 8. API and WebSocket protocol
+
+Existing REST/WS messages stay as is (EXISTS). New messages (PROPOSED), JSON over WebSocket except audio frames which are binary with a small header.
+
+Client to server:
+- `hello {session_id?, user_id?, device, capabilities}`
+- `landmarks {t, frame_id, points}` (only if client-side pose)
+- `ptt_start {turn_id}` / `ptt_stop {turn_id}`
+- `audio_chunk {turn_id, seq, codec}` (binary)
+- `text_message {text}`
+- `interrupt {reason}` (barge-in)
+- `select_move {move_id}`
+
+Server to client:
+- `state {phase, move_id, attempt_id?}`
+- `stt_partial {turn_id, text}` / `stt_final {turn_id, text}`
+- `coach_turn_start {turn_id, mode}`
+- `coach_text_delta {turn_id, text}`
+- `coach_audio_chunk {turn_id, seq, codec}` (binary)
+- `coach_turn_end {turn_id, interrupted}`
+- `attempt_result {attempt_id, score, joints, freezes}`
+- `error {code, message, recoverable}`
+
+REST (PROPOSED): `GET /moves`, `GET /sessions/:id`, `GET /progress`, `GET/DELETE /memory`, `DELETE /me/data`.
+
+## 9. Prompt architecture
+
+- **System prompt** = persona fragment + safety rules + grounding contract + style rules (spoken language, length limits).
+- **Per-turn context** = mode, move info, `facts` JSON, last few turns, relevant memory entries.
+- **Tools** as listed in 3.6, with strict JSON schemas.
+- Live cue prompt is separate, tiny, and optimized for latency (current Haiku path).
+- Prompts live in `backend/app/prompts/` as versioned files, and each `coach_turns` row records the prompt version.
+
+## 10. Evaluation plan
+
+| Metric | How | Script |
+|---|---|---|
+| Cue LLM latency | repeat calls, median/p95 | `benchmark_pipeline.py coach` (EXISTS) |
+| DTW separation | correct vs wrong move distances | `benchmark_pipeline.py dtw` (EXISTS) |
+| Pose fps | recorded clip through estimator | `benchmark_pipeline.py pose --video clip --with-dtw` (EXISTS, needs real run) |
+| Voice to voice latency | timestamp mic release to first audio sample | PROPOSED `voice` stage |
+| Grounding rate | label about 100 cues (`--n 13`) in `eval_cue_labels` | PROPOSED labeling script |
+| Repetition | share of identical consecutive cues | from `coach_turns` |
+| Talk-over rate | coach audio overlapping detected motion | from logs |
+| STT accuracy with music | scripted phrases over playback at set volume | PROPOSED |
+| Barge-in latency | speech onset to TTS silence | PROPOSED |
+| User study | 5 dancers, 3 sessions each: SUS score, "felt like a human coach" 1 to 5, would they use again | M6 |
+
+Rule: any number used in README or resume must come from one of these scripts with output committed under `docs/benchmarks/`.
+
+## 11. Milestones
+
+- **M1 Phone path and demo.** HTTPS tunnel, phone camera streaming, text cues on phone, **audio streamed to the phone**, README demo clip. Done when a 60-second video shows a phone session with spoken cues.
+- **M2 Measure.** Run pose fps on a real clip, grounding labels, voice stage skeleton, publish `docs/benchmarks/`.
+- **M3 Voice in.** Push-to-talk, STT, text and voice questions answered with grounded facts.
+- **M4 Voice out and barge-in.** Streaming TTS, interruption, queue-until-pause logic.
+- **M5 Persona, memory, persistence.** Postgres schema, personas, `coach_memory`, progress view.
+- **M6 Evals and beta.** Full eval suite, 5-user study, fix top issues.
+- **M7 Client-side pose.** MediaPipe Web, landmarks only, lower latency and privacy.
+- **M8 Hardware accessory.** IMU fusion for legs and floor, optional.
+
+## 12. Risks
+
+| Risk | Mitigation |
+|---|---|
+| Music and floor noise break STT | push-to-talk, measure WER, allow text fallback |
+| iOS blocks audio autoplay | unlock audio context on first user tap |
+| getUserMedia needs HTTPS | tunnel in dev, proper cert in deploy |
+| Battery and heat on phone | cap fps, lower resolution, measure |
+| Occlusion and partial body in frame | framing guide, confidence gating, say what it cannot see |
+| LLM latency spikes | timeouts and templated fallback, stream tokens |
+| Hallucinated coaching | grounding contract, tools, measured grounding rate |
+| Cost creep | per-turn cost logging, cap tokens, Haiku default |
+| Privacy | landmarks only, opt-in storage, delete-all endpoint |
+| STT misses breakdance vocabulary | custom vocabulary or prompt hints, test list of terms |
+| User injury | safety rules, warm-up prompts, no medical claims |
+
+## 13. Open questions
+
+1. Which STT and TTS providers (cost, latency, streaming, iOS compatibility)?
+2. Is server-side pose acceptable over WiFi from a phone, or is client-side needed for the demo?
+3. How many moves in the first public catalog, and which?
+4. Do we host this (cost) or keep it self-hosted for the portfolio?
+5. Auth: anonymous only for beta, or Supabase auth from M5?
+
+## 14. Glossary
+
+- **DTW**: dynamic time warping, aligns two motion sequences of different speed.
+- **Landmark**: one of 33 body points from MediaPipe Pose.
+- **Attempt**: one continuous try at a move, from motion start to motion stop.
+- **Barge-in**: user speech interrupting the coach's speech.
+- **Grounded**: a claim traceable to measured data or a tool result.
+- **PTT**: push-to-talk.
+- **IMU**: inertial measurement unit (accelerometer and gyro).
