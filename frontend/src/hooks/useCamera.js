@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useState } from "react";
 
 // MediaPipe doesn't need full resolution. Downscaling makes each frame smaller
 // to encode, send, and decode, and makes pose estimation faster.
@@ -8,13 +8,19 @@ export function useCamera(onFrame, { fps = 30, maxWidth = DEFAULT_MAX_WIDTH, can
   const videoRef    = useRef(null);
   const canvasRef   = useRef(null);
   const intervalRef = useRef(null);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("CAMERA NEEDS HTTPS");
+      return;
+    }
     navigator.mediaDevices
       .getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } } })
       .then((stream) => {
         if (videoRef.current) videoRef.current.srcObject = stream;
-      });
+      })
+      .catch(() => setError("ALLOW CAMERA ACCESS"));
     return () => {
       clearInterval(intervalRef.current);
       if (videoRef.current?.srcObject)
@@ -45,5 +51,5 @@ export function useCamera(onFrame, { fps = 30, maxWidth = DEFAULT_MAX_WIDTH, can
   }, [onFrame, fps, maxWidth, canSend]);
 
   const stopCapture = useCallback(() => clearInterval(intervalRef.current), []);
-  return { videoRef, canvasRef, startCapture, stopCapture };
+  return { videoRef, canvasRef, startCapture, stopCapture, error };
 }

@@ -77,7 +77,7 @@ export default function Session({ sessionId, onEnd }) {
     if (msg.imu) setImu(msg.imu);
     if (msg.landmarks)                  setLandmarks(msg.landmarks);
     if (msg.visibility)                 setVisibility(msg.visibility);
-    setFraming((f) => nextFraming(f, msg.visibility));
+    setFraming((f) => nextFraming(f, msg.live_visibility));
     if (msg.ghost_bones)                setGhostBones(msg.ghost_bones);
     if (msg.ghost_anchor !== undefined) setGhostAnchor(msg.ghost_anchor);
     if (msg.aligned     !== undefined)  setAligned(msg.aligned);
@@ -107,7 +107,7 @@ export default function Session({ sessionId, onEnd }) {
 
   // fps is now a ceiling, not a fixed rate. Backpressure in canSend() means the
   // real rate automatically matches how fast the backend can keep up.
-  const { videoRef, canvasRef, startCapture, stopCapture } =
+  const { videoRef, canvasRef, startCapture, stopCapture, error: cameraError } =
     useCamera(handleFrame, { fps: 30, maxWidth: 480, canSend });
 
   useEffect(() => {
@@ -196,7 +196,7 @@ export default function Session({ sessionId, onEnd }) {
       </div>
 
       {/* ── guidance banner ── */}
-      {guidance && !aligned && (
+      {framing.ready && guidance && !aligned && (
         <div style={{
           background: "rgba(255,45,45,0.07)",
           borderBottom: "1px solid rgba(255,45,45,0.15)",
@@ -275,7 +275,7 @@ export default function Session({ sessionId, onEnd }) {
           )}
 
           <FreezeMeter live={freezeLive} result={freezeDone} />
-          {wsReady && !framing.ready && <FramingGuide problem={framing.problem} />}
+          {wsReady && !framing.ready && <FramingGuide problem={cameraError || framing.problem} />}
           <CoachCue cue={coachCue} size={CAPTION_SIZES[capSize]} />
         </div>
 

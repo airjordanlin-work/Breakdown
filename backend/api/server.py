@@ -113,6 +113,11 @@ def _diagnose_visibility(pose_frame) -> Optional[str]:
     return None
 
 
+def _live_visibility(pose_frame) -> list[float]:
+    """Per-landmark visibility of the current frame, or [] when no pose was found."""
+    return pose_frame.visibility.tolist() if pose_frame is not None else []
+
+
 def _imu_payload(captured_at: float) -> dict:
     """IMU health plus how closely an IMU sample lines up with this frame.
 
@@ -244,6 +249,9 @@ class CoachingSession:
             "type":         "frame",
             "landmarks":    landmarks,
             "visibility":   visibility,
+            # This frame's own visibility. "visibility" above is held from the
+            # last reliable pose, so only this one shows a dancer leaving frame.
+            "live_visibility": _live_visibility(pose),
             "ghost_bones":  GHOST_BONES if fill_ratio >= 1.0 else [],
             "ghost_anchor": {
                 "hip_cx": hip_cx,

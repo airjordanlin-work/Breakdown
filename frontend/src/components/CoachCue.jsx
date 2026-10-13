@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 // Caption sizes in px. The coach's spoken words always show as text (NFR-17);
-// the dancer picks a size with the A button in the session bar.
+// the dancer picks a size with the TEXT S/M/L button in the session bar.
 export const CAPTION_SIZES = [16, 22, 30];
 
 export default function CoachCue({ cue, size = CAPTION_SIZES[0] }) {
