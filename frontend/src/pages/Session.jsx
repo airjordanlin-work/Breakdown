@@ -52,15 +52,33 @@ export default function Session({ sessionId, onEnd }) {
     return next;
   });
 
+  // Why there is no sound, when the backend knows. null means audio is fine so far.
+  const [audioNote, setAudioNote] = useState(null);
+
+  // stopCapture is defined below; the ref lets handleEnd stop frames before
+  // the backend tears the session down.
+  const stopCaptureRef = useRef(null);
   const handleEnd = async () => {
-    await apiFetch(`/session/${sessionId}`, { method: "DELETE" });
-    onEnd();
+    stopCaptureRef.current?.();
+    try {
+      await apiFetch(`/session/${sessionId}`, { method: "DELETE" });
+    } finally {
+      onEnd();
+    }
   };
 
   // Coach audio comes from the backend over the WebSocket.
   const { unlocked: soundOn, unlock: unlockSound, playChunk, setLatestTurn } = useCoachAudio();
 
   const handleMessage = useCallback((msg) => {
+    if (msg.type === "voice_status") {
+      setAudioNote(msg.available ? null : `Coach voice is off: ${msg.reason}`);
+      return;
+    }
+    if (msg.type === "coach_audio_skipped") {
+      setAudioNote(`No audio for the last cue: ${msg.reason}`);
+      return;
+    }
     if (msg.type === "coach_cue") {
       setCoachCue(msg.cue);
       setLatestTurn(msg.turn_id);
@@ -109,6 +127,8 @@ export default function Session({ sessionId, onEnd }) {
   // real rate automatically matches how fast the backend can keep up.
   const { videoRef, canvasRef, startCapture, stopCapture, error: cameraError } =
     useCamera(handleFrame, { fps: 30, maxWidth: 480, canSend });
+
+  stopCaptureRef.current = stopCapture;
 
   useEffect(() => {
     const t = setTimeout(() => startCapture(), 800);
@@ -194,6 +214,18 @@ export default function Session({ sessionId, onEnd }) {
           </button>
         </div>
       </div>
+
+      {audioNote && (
+        <div style={{
+          background: "rgba(255,193,76,0.08)",
+          borderBottom: "1px solid rgba(255,193,76,0.2)",
+          padding: "7px 24px",
+          fontSize: 10, letterSpacing: "0.2em", color: "#ffc14c",
+          textAlign: "center", flexShrink: 0,
+        }}>
+          {audioNote.toUpperCase()}
+        </div>
+      )}
 
       {/* ── guidance banner ── */}
       {framing.ready && guidance && !aligned && (

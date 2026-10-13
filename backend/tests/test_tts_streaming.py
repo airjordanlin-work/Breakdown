@@ -137,16 +137,64 @@ def test_send_coach_cue_sends_caption_then_audio_with_same_turn_id():
     assert payload[:4] == b"RIFF"
 
 
+def _caption_then_skip(ws) -> tuple[dict, dict]:
+    """Assert the cue went out as caption + coach_audio_skipped, and return both."""
+    assert [kind for kind, _ in ws.sent] == ["text", "text"]
+    caption, skipped = (json.loads(data) for _, data in ws.sent)
+    assert caption["type"] == "coach_cue" and caption["cue"] == "Stay low"
+    assert skipped["type"] == "coach_audio_skipped"
+    assert skipped["turn_id"] == caption["turn_id"]
+    return caption, skipped
+
+
 def test_send_coach_cue_without_tts_still_sends_caption():
     ws = FakeSocket()
-    assert asyncio.run(server.send_coach_cue(ws, make_voice(None), "Stay low")) is False
-    assert [kind for kind, _ in ws.sent] == ["text"]
+    voice = make_voice(None)
+    voice.unavailable_reason = "Kokoro model file missing: kokoro-v1.0.onnx"
+    assert asyncio.run(server.send_coach_cue(ws, voice, "Stay low")) is False
+    _, skipped = _caption_then_skip(ws)
+    assert skipped["reason"] == "Kokoro model file missing: kokoro-v1.0.onnx"
 
 
 def test_send_coach_cue_with_no_voice_object_still_sends_caption():
     ws = FakeSocket()
     assert asyncio.run(server.send_coach_cue(ws, None, "Stay low")) is False
-    assert [kind for kind, _ in ws.sent] == ["text"]
+    _, skipped = _caption_then_skip(ws)
+    assert skipped["reason"] == "no voice for this session"
+
+
+def test_send_coach_cue_reports_synth_failure():
+    class Broken:
+        def create(self, *a, **k):
+            raise RuntimeError("onnx blew up")
+    ws = FakeSocket()
+    assert asyncio.run(server.send_coach_cue(ws, make_voice(Broken()), "Stay low")) is False
+    _, skipped = _caption_then_skip(ws)
+    assert "failed" in skipped["reason"]
+
+
+def test_voice_status_reports_why_audio_is_off():
+    voice = make_voice(None)
+    voice.unavailable_reason = "kokoro-onnx is not installed"
+    assert server.voice_status(voice) == {
+        "type": "voice_status", "available": False, "reason": "kokoro-onnx is not installed",
+    }
+    assert server.voice_status(make_voice(FakeKokoro()))["available"] is True
+
+
+def test_warm_up_voice_logs_timing(capsys):
+    kokoro = FakeKokoro()
+    server.warm_up_voice(make_voice(kokoro))
+    assert len(kokoro.calls) == 1
+    assert "warm-up synth took" in capsys.readouterr().out
+
+
+def test_warm_up_voice_logs_loudly_when_audio_is_off(capsys):
+    voice = make_voice(None)
+    voice.unavailable_reason = "Kokoro voices file missing: voices-v1.0.bin"
+    server.warm_up_voice(voice)
+    out = capsys.readouterr().out
+    assert "COACH AUDIO OFF" in out and "voices-v1.0.bin" in out
 
 
 def test_send_coach_cue_times_out_to_text_only():
@@ -155,4 +203,5 @@ def test_send_coach_cue_times_out_to_text_only():
     start = time.perf_counter()
     assert asyncio.run(server.send_coach_cue(ws, slow, "Stay low", timeout=0.05)) is False
     assert time.perf_counter() - start < 0.4
-    assert [kind for kind, _ in ws.sent] == ["text"]
+    _, skipped = _caption_then_skip(ws)
+    assert "timed out" in skipped["reason"]
