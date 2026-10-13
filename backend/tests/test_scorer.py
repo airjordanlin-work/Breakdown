@@ -244,3 +244,75 @@ def test_score_combo_on_third_perfect(tmp_path: Path) -> None:
     assert r3.points_this_attempt == pytest.approx(150.0)  # streak 3 → 1.5x
     assert r3.combo_multiplier_applied == pytest.approx(1.5)
     assert scorer.streak == 3
+
+
+# ------------------------------------------------------------ reps
+
+from app.dtw_engine import compare_to_move, load_reference_library
+from app.scorer import KeyframeResult
+
+REF_DIR = Path(__file__).resolve().parents[1] / "reference_moves"
+
+
+def _br01():
+    return next(m for m in load_reference_library(REF_DIR) if m.name == "br_01")
+
+
+def test_reference_dancer_scores_a_clean_rep():
+    """Doing the move exactly like the reference must score every joint Perfect."""
+    move = _br01()
+    window = list(move.sequence.reshape(-1, 33, 3))
+    dtw = compare_to_move(move.sequence, move)
+    result = Scorer(REF_DIR).score_rep(dtw, window)
+    assert result is not None
+    assert {r.joint_name for r in result.results} == {
+        "left_elbow", "right_elbow", "left_knee", "right_knee"}
+    assert all(r.tier == PERFECT and r.diff < 1e-3 for r in result.results)
+
+
+def test_targets_come_from_the_reference_not_a_constant():
+    move = _br01()
+    dtw = compare_to_move(move.sequence, move)
+    result = Scorer(REF_DIR).score_rep(dtw, list(move.sequence.reshape(-1, 33, 3)))
+    targets = {r.joint_name: r.target_angle for r in result.results}
+    assert targets["left_elbow"] != pytest.approx(160.0, abs=1.0)
+
+
+def test_bent_elbows_are_flagged_with_a_direction():
+    move = _br01()
+    window = [f.copy() for f in move.sequence.reshape(-1, 33, 3)]
+    for f in window:   # fold the left wrist back onto the shoulder: elbow fully bent
+        f[15] = f[11]
+    dtw = compare_to_move(move.sequence, move)
+    scorer = Scorer(REF_DIR)
+    result = scorer.score_rep(dtw, window)
+    left = next(r for r in result.results if r.joint_name == "left_elbow")
+    assert left.tier == MISS
+    assert left.actual_angle < left.target_angle
+    assert scorer.stats().focus_joint == "left_elbow"
+    assert scorer.stats().focus_fix == "straighten"
+
+
+def _rep(tier):
+    return [KeyframeResult("left_knee", 100.0, 120.0, 20.0, tier, 0.0)]
+
+
+def test_clean_rep_streaks(tmp_path: Path):
+    scorer = Scorer(tmp_path)
+    for tier in (PERFECT, CLOSE, PERFECT, MISS, PERFECT):
+        scorer._record(_rep(tier), "br_01")
+    st = scorer.stats()
+    assert st.reps == 5
+    assert st.clean_reps == 4
+    assert st.best_streak == 3
+    assert st.clean_streak == 1
+    assert st.focus_joint == "left_knee" and st.focus_fix == "straighten"
+    scorer.reset()
+    assert scorer.stats().reps == 0 and scorer.stats().best_streak == 0
+
+
+def test_not_aligned_rep_is_not_scored():
+    move = _br01()
+    dtw = compare_to_move(move.sequence, move)
+    from dataclasses import replace
+    assert Scorer(REF_DIR).score_rep(replace(dtw, aligned=False), []) is None

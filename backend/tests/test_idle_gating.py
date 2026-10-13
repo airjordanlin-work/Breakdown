@@ -50,7 +50,7 @@ class CountingScorer:
     def __init__(self):
         self.calls = 0
 
-    def score(self, dtw, pose):
+    def score_rep(self, dtw, window):
         self.calls += 1
         return None
 
@@ -81,6 +81,8 @@ def make_session(poses) -> CoachingSession:
     s.frame_idx = 0
     s.last_captured_at = None
     s.lost_frames = 0
+    s.frames_since_rep = 0
+    s.future_window = []
     return s
 
 
@@ -117,3 +119,22 @@ def test_lost_body_clears_the_window_and_stops_scoring():
     assert s.scorer.calls == scored
     ctx = out[-1]["_coach_context"]
     assert not ctx["tracked"] and not ctx["moving"]
+
+
+def test_one_score_per_rep_not_per_comparison():
+    from app.scorer import KeyframeResult, ScoreResult
+
+    class RepScorer(CountingScorer):
+        def score_rep(self, dtw, window):
+            self.calls += 1
+            r = KeyframeResult("left_elbow", 150.0, 160.0, 10.0, "Perfect", 100.0)
+            return ScoreResult([r], 100.0, 1.0, "br_01")
+
+    n = WINDOW_LEN * 3
+    s = make_session([_pose(0.2 * np.sin(i / 2)) for i in range(n)])
+    s.scorer = RepScorer()
+    run(s, n)
+    # DTW compares on nearly every full-buffer frame, but a rep is scored
+    # only once per WINDOW_LEN new frames
+    assert s.engine.compares > 3
+    assert s.scorer.calls == n // WINDOW_LEN

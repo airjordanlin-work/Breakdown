@@ -163,21 +163,30 @@ def convert_sequence(raw: np.ndarray, seconds: float) -> tuple[np.ndarray, dict]
     }
 
 
+# Joints checked at each keyframe. No target_angle: the scorer measures the
+# target from the reference clip at that frame, so it matches the real move.
+DEFAULT_KEYFRAME_JOINTS = [
+    {"joint_name": "left_elbow",  "joint_triplet": [11, 13, 15], "threshold": 30.0},
+    {"joint_name": "right_elbow", "joint_triplet": [12, 14, 16], "threshold": 30.0},
+    {"joint_name": "left_knee",   "joint_triplet": [23, 25, 27], "threshold": 30.0},
+    {"joint_name": "right_knee",  "joint_triplet": [24, 26, 28], "threshold": 30.0},
+]
+# Quarter points through the clip, ending on the last frame.
+DEFAULT_KEYFRAMES = [round(TARGET_FRAMES * q) - 1 for q in (0.25, 0.5, 0.75, 1.0)]
+
+
+def default_keyframes() -> list[dict]:
+    return [{"frame": f, "joints": [dict(j) for j in DEFAULT_KEYFRAME_JOINTS]}
+            for f in DEFAULT_KEYFRAMES]
+
+
 def default_meta(move_name: str, pkl_name: str, dtw_threshold: float) -> dict:
     return {
         "name": move_name,
         "dtw_threshold": dtw_threshold,
         "source": "AIST++",
         "original_file": pkl_name,
-        "keyframes": [{
-            "frame": 59,
-            "joints": [
-                {"joint_name": "left_elbow", "joint_triplet": [11, 13, 15],
-                 "target_angle": 160.0, "threshold": 30.0},
-                {"joint_name": "right_elbow", "joint_triplet": [12, 14, 16],
-                 "target_angle": 160.0, "threshold": 30.0},
-            ],
-        }],
+        "keyframes": default_keyframes(),
     }
 
 

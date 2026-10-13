@@ -62,6 +62,9 @@ KEYFRAME_FLASH = 30
 # so a stale window is never compared or scored again. A few frames of grace
 # rides out MediaPipe dropping a single frame mid-move.
 LOST_RESET_FRAMES = 10
+# One rep = one full window of new tracked frames. Without this, every DTW
+# result (several a second) counted as an attempt.
+REP_FRAMES = WINDOW_LEN
 _sessions: dict[str, "CoachingSession"] = {}
 _executor      = ThreadPoolExecutor(max_workers=4)
 # TTS gets its own small pool so a slow synth never steals a pose-frame slot.
@@ -160,6 +163,8 @@ class CoachingSession:
         self.freeze         = FreezeMonitor(_imu_store)
         self.pending_cue: Optional[asyncio.Task] = None
         self.lost_frames    = 0
+        self.frames_since_rep = 0
+        self.future_window: list = []
 
         dummy = np.zeros((480, 640, 3), dtype=np.uint8)
         self.estimator.process(dummy)
@@ -192,7 +197,8 @@ class CoachingSession:
         if tracked:
             self.lost_frames = 0
             self.pose_frame = pose
-            self.buf.add(pose)
+            if self.buf.add(pose):
+                self.frames_since_rep += 1
             guidance = _diagnose_visibility(pose)
         else:
             guidance = "No body detected — step into frame"
@@ -203,12 +209,15 @@ class CoachingSession:
                 # Body gone: drop the old window so it is not compared or
                 # scored again while nobody is dancing.
                 self.buf.clear()
+                self.frames_since_rep = 0
 
         window = [f.landmarks for f in self.buf._frames]
         moving = tracked and is_moving(window)
 
         if tracked and self.buf.is_ready() and self.future is None:
             self.future = self.engine.compare_async(window)
+            # DTW path indices point into this exact window, not a later one
+            self.future_window = window
 
         if self.future is not None and self.future.done():
             try:
@@ -217,13 +226,15 @@ class CoachingSession:
                 self.dtw_result = None
             self.future = None
 
-            # Score only a live, moving body. Standing still or out of frame
-            # used to keep scoring the last window over and over.
-            if self.dtw_result and self.dtw_result.aligned and tracked and moving:
-                s = self.scorer.score(self.dtw_result, self.pose_frame)
+            # Score only a live, moving body, and once per rep. Standing still
+            # or out of frame used to keep scoring the last window over and over.
+            rep_ready = self.frames_since_rep >= REP_FRAMES
+            if self.dtw_result and self.dtw_result.aligned and tracked and moving and rep_ready:
+                s = self.scorer.score_rep(self.dtw_result, self.future_window)
                 if s is not None:
                     self.score_result  = s
                     self.flash_counter = KEYFRAME_FLASH
+                    self.frames_since_rep = 0
 
         if self.flash_counter > 0:
             self.flash_counter -= 1
@@ -261,6 +272,7 @@ class CoachingSession:
         if self.score_result and self.flash_counter > 0:
             score_payload = {
                 "points":  round(self.score_result.points_this_attempt),
+                "clean":   all(r.tier != "Miss" for r in self.score_result.results),
                 "results": [
                     {
                         "joint":  r.joint_name.replace("_", " "),
@@ -299,6 +311,12 @@ class CoachingSession:
                 "perfects":     stats.perfects,
                 "closes":       stats.closes,
                 "misses":       stats.misses,
+                "reps":         stats.reps,
+                "clean_reps":   stats.clean_reps,
+                "clean_streak": stats.clean_streak,
+                "best_streak":  stats.best_streak,
+                "focus_joint":  stats.focus_joint.replace("_", " ") if stats.focus_joint else None,
+                "focus_fix":    stats.focus_fix,
             },
             "score_result": score_payload,
             "imu":          _imu_payload(captured_at),

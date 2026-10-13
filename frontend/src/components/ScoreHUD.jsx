@@ -1,27 +1,38 @@
+// Rep view: plain tallies of scored reps from the server, no points or grade.
+// A clean rep is one where no checked joint was in the Miss tier.
+const label = { fontSize:9, letterSpacing:"0.2em", color:"#555", marginBottom:8 };
+
 export default function ScoreHUD({ stats }) {
-  const gc = { S:"#ffd700", A:"#4cff4c", B:"#4ccfff", C:"#ffc14c", D:"#ff4c4c" }[stats.grade] || "#fff";
-  const total = Math.max(stats.perfects + stats.closes + stats.misses, 1);
+  const reps   = stats.reps ?? 0;
+  const clean  = stats.clean_reps ?? 0;
+  const streak = stats.clean_streak ?? 0;
+  const best   = stats.best_streak ?? 0;
+  const hot    = streak >= 3;
+
   return (
     <div>
-      <div style={{ fontSize:9, letterSpacing:"0.2em", color:"#333", marginBottom:8 }}>SCORE</div>
-      <div style={{ fontSize:48, lineHeight:1, marginBottom:4 }}>{stats.total_points.toLocaleString()}</div>
-      <div style={{ display:"inline-block", border:`2px solid ${gc}`, color:gc,
-        fontSize:22, padding:"2px 16px", marginBottom:20 }}>{stats.grade}</div>
-      <div style={{ fontSize:9, letterSpacing:"0.2em", color:"#333", marginBottom:8 }}>STREAK</div>
-      <div style={{ fontSize:28, marginBottom:20, color: stats.streak > 2 ? "#ffd700" : "#fff" }}>{stats.streak}×</div>
-      <div style={{ fontSize:9, letterSpacing:"0.2em", color:"#333", marginBottom:10 }}>BREAKDOWN</div>
-      <div style={{ display:"flex", gap:8 }}>
-        {[["P", stats.perfects, "#4cff4c"], ["C", stats.closes, "#ffc14c"], ["M", stats.misses, "#ff4c4c"]].map(([l,v,c]) => (
-          <div key={l} style={{ flex:1, background:"#0d0d0d", border:"1px solid #1a1a1a", padding:"8px 0", textAlign:"center" }}>
-            <div style={{ fontSize:18, color:c }}>{v}</div>
-            <div style={{ fontSize:9, color:"#444", letterSpacing:"0.1em" }}>{l}</div>
-          </div>
-        ))}
+      <div style={label}>CLEAN REPS</div>
+      <div style={{ display:"flex", alignItems:"baseline", gap:8, marginBottom:20 }}>
+        <span style={{ fontSize:48, lineHeight:1 }}>{clean}</span>
+        <span style={{ fontSize:14, color:"#555" }}>of {reps}</span>
       </div>
-      <div style={{ marginTop:12, height:3, background:"#111", display:"flex" }}>
-        {[[stats.perfects/total,"#4cff4c"],[stats.closes/total,"#ffc14c"],[stats.misses/total,"#ff4c4c"]].map(([w,c],i) => (
-          <div key={i} style={{ width:`${w*100}%`, background:c }} />
-        ))}
+
+      <div style={label}>STREAK</div>
+      <div style={{ display:"flex", alignItems:"baseline", gap:8, marginBottom:20 }}>
+        <span style={{ fontSize:28, color: hot ? "#ffd700" : "#fff" }}>
+          {streak}{hot ? " 🔥" : ""}
+        </span>
+        <span style={{ fontSize:11, color:"#555" }}>best {best}</span>
+      </div>
+
+      <div style={label}>FOCUS</div>
+      <div style={{ fontSize:12, letterSpacing:"0.1em", border:"1px solid #222",
+        padding:"8px 10px", color: stats.focus_joint ? "#ffc14c" : "#4cff4c" }}>
+        {reps === 0
+          ? <span style={{ color:"#555" }}>Dance a full rep for your first read</span>
+          : stats.focus_joint
+            ? `${stats.focus_fix?.toUpperCase()} ${stats.focus_joint.toUpperCase()}`
+            : "ALL JOINTS ON POINT"}
       </div>
     </div>
   );
