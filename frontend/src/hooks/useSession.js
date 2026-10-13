@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { API } from "../api";
 
 export function useSession() {
   const [sessionId, setSessionId] = useState(null);
@@ -6,7 +7,7 @@ export function useSession() {
   const startSession = useCallback(async (config = {}) => {
     setLoading(true);
     try {
-      const res = await fetch("http://localhost:8000/session/start", {
+      const res = await fetch(`${API}/session/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),

@@ -1,4 +1,5 @@
 import { useRef, useCallback, useEffect } from "react";
+import { wsUrl } from "../api";
 
 // How long to wait for a reply before assuming it was lost and sending again.
 // Prevents the pipeline from freezing if one response never arrives.
@@ -21,7 +22,7 @@ export function useWebSocket(sessionId, onMessage, onOpen, onBinary) {
 
   useEffect(() => {
     if (!sessionId) return;
-    ws.current = new WebSocket(`ws://localhost:8000/ws/${sessionId}`);
+    ws.current = new WebSocket(wsUrl(`/ws/${sessionId}`));
     ws.current.binaryType = "arraybuffer";
     ws.current.onopen = () => {
       inFlight.current = false;

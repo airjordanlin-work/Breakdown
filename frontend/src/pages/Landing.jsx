@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { API } from "../api";
 
 const DIFF_COLOR = {
   Beginner:     { bg: "#0a1f0a", border: "#1a5c1a", text: "#4cff4c" },
@@ -192,7 +193,7 @@ export default function Landing({ onStart }) {
   const [error,    setError]    = useState(null);
 
   useEffect(() => {
-    fetch("http://localhost:8000/moves")
+    fetch(`${API}/moves`)
       .then((r) => r.json())
       .then((d) => {
         setMoves(d.moves);

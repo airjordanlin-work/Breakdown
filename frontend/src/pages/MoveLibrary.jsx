@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import MovePreview from "../components/MovePreview";
 import "../styles/move-library.css";
+import { API } from "../api";
 
-const API = "http://localhost:8000";
 const TIERS = ["Beginner", "Intermediate", "Advanced"];
 const STATS = [
   { key: "power",     label: "Power",     hint: "How fast the arms and legs move, compared to the other moves" },

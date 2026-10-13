@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { drawFigure, drawSkeleton, lerpPose } from "../render/figure";
+import { API } from "../api";
 
-const API = "http://localhost:8000";
 const cache = new Map();          // move id -> preview data, so switching back is instant
 const TRAIL = 4;                  // afterimages drawn behind the current pose
 const TRAIL_GAP = 3;              // frames between afterimages
