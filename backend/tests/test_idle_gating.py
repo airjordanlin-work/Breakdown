@@ -9,6 +9,7 @@ import numpy as np
 
 from api import server
 from api.server import CoachingSession, LOST_RESET_FRAMES
+from app.attempts import AttemptTracker
 from app.buffer import PoseBuffer, WINDOW_LEN
 from app.dtw_engine import DTWResult
 from app.pose_estimator import PoseFrame
@@ -83,6 +84,9 @@ def make_session(poses) -> CoachingSession:
     s.lost_frames = 0
     s.frames_since_rep = 0
     s.future_window = []
+    s.attempts = AttemptTracker()
+    s.previous_rep = None
+    s.latest_rep = None
     return s
 
 
@@ -138,3 +142,26 @@ def test_one_score_per_rep_not_per_comparison():
     # only once per WINDOW_LEN new frames
     assert s.engine.compares > 3
     assert s.scorer.calls == n // WINDOW_LEN
+
+
+def test_stopping_after_reps_hands_the_attempt_to_the_debrief_once():
+    from app.scorer import KeyframeResult, ScoreResult
+
+    class RepScorer(CountingScorer):
+        def score_rep(self, dtw, window):
+            self.calls += 1
+            r = KeyframeResult("left_elbow", 120.0, 160.0, 40.0, "Miss", 0.0)
+            return ScoreResult([r], 0.0, 1.0, "br_01")
+
+    n_move = WINDOW_LEN * 2
+    n_still = 60
+    poses = [_pose(0.2 * np.sin(i / 2)) for i in range(n_move)] + [_pose(0.0)] * n_still
+    s = make_session(poses)
+    s.scorer = RepScorer()
+    out = [s.process_frame_sync(FRAME_B64, i / 15) for i in range(n_move + n_still)]
+    debriefs = [o["_coach_context"]["debrief_reps"] for o in out if o["_coach_context"]["debrief_reps"]]
+    assert len(debriefs) == 1
+    assert len(debriefs[0]) == s.scorer.calls
+    assert debriefs[0][0]["results"][0] == {
+        "joint": "left elbow", "tier": "Miss", "diff": 40.0, "fix": "straighten", "points": 0,
+    }

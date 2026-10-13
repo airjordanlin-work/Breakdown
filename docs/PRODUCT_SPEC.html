@@ -93,7 +93,7 @@ The model must not state a body-position fact, score, or progress claim unless i
 
 - Each turn gets a `facts` JSON block (current move, last attempt scores, joint deviations, freeze events, recent history).
 - The model can call tools: `get_recent_attempts`, `get_move_info`, `get_progress`, `set_practice_move`, `save_note`.
-- Output is checked by a grounding heuristic (extends `_grounding_flags` in `benchmark_pipeline.py`); flagged turns are logged and measured.
+- Output is checked by a grounding heuristic (extends `_grounding_flags` in `benchmark_pipeline.py`); flagged turns are logged and measured. EXISTS for live cues and the debrief: `backend/app/grounding.py` refuses a reply that names an unmeasured body part or side, a number not in the facts, an angle, points or grade, or a past session, and the templated line is spoken instead. Measuring the flag rate is PROPOSED.
 - Safe fallback: if the model fails or times out, speak a templated cue from the scorer output.
 
 ### 3.7 Safety
@@ -321,7 +321,7 @@ Client to server:
 
 Server to client:
 - `frame {..., tracked, moving, score_result}` (EXISTS). `tracked` is true when a body is reliably detected in this frame, `moving` when the dancer is moving (median joint travel over the last 15 buffered frames, see `backend/app/activity.py`). The coach stays silent and nothing is scored unless both are true. Each `score_result.results` entry carries `fix`: `straighten` or `bend`, the direction the joint needs to go. `score_result` is sent once per rep (one full window of new tracked frames), with `clean` true when no joint is in the Miss tier. `stats` adds the rep view: `reps`, `clean_reps`, `clean_streak`, `best_streak`, `focus_joint` and `focus_fix` (the joint off most often over the last 5 reps). Keyframe joint targets are measured from the move's reference clip unless the meta file sets `target_angle`. The old `total_points` and `grade` fields are still sent but no longer shown.
-- `coach_cue {cue, turn_id}` (EXISTS). Caption text, sent before the matching `coach_audio_chunk`, so it still shows if TTS fails or times out.
+- `coach_cue {cue, turn_id, mode}` (EXISTS). Caption text, sent before the matching `coach_audio_chunk`, so it still shows if TTS fails or times out. `mode` is `live` for a cue while moving or `debrief` for the summary sent when the dancer stops after scored reps.
 - `voice_status {available, reason}` (EXISTS). Sent once when the socket opens. `reason` says why coach audio is off (for example the Kokoro model file is missing); the UI shows it.
 - `coach_audio_skipped {turn_id, reason}` (EXISTS). Sent after a `coach_cue` caption when no audio follows (TTS missing, timed out or failed).
 - `state {phase, move_id, attempt_id?}`
