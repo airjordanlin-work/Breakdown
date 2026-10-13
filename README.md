@@ -14,7 +14,7 @@ It started as a personal problem. Practicing alone means nobody tells you if you
 - **Compares your movement to reference moves** with Dynamic Time Warping, so doing a move slower or faster than the reference still lines up
 - **Scores keyframes** by joint angle, with per-joint feedback and a combo system
 - **Grades freezes with wearable IMUs:** hold time, a 0 to 100 stability score, and which limb wobbled most
-- **Coaches out loud:** Claude Haiku turns the measured data into short cues, spoken locally with Kokoro TTS
+- **Coaches out loud:** Claude Haiku turns the measured data into short cues, voiced with Kokoro TTS on the server and streamed to the browser over the WebSocket, so they play on a phone too
 - **Fuses camera and sensors:** the IMUs cover what the camera can't see well (inversions, overlapping limbs), and the camera rules out false freezes
 
 ---
@@ -153,6 +153,8 @@ curl -L -o voices-v1.0.bin https://github.com/thewh1teagle/kokoro-onnx/releases/
 ```
 
 The app runs without either. Coaching and voice just switch off.
+
+Coach audio plays in the browser, not on the server. Browsers block sound until you tap the page, so if a session shows TAP FOR SOUND, tap it once.
 
 ### 4. Wearable sensors (optional)
 

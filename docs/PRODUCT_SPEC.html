@@ -39,7 +39,7 @@ The product must work with hardware everyone already owns (one phone, no purchas
 | Buffer | 60-frame deque (EXISTS) |
 | Matching | fastdtw against AIST++ references, per-move `dtw_threshold`; keyframe joint-angle scorer (EXISTS) |
 | Coaching | Claude Haiku generates a text cue from DTW and scorer output; one-way, no user input (EXISTS) |
-| Voice out | Kokoro ONNX TTS, played on the server via `afplay` (EXISTS, **does not reach a phone**) |
+| Voice out | Kokoro ONNX TTS on the server, WAV streamed to the browser over WebSocket and played with Web Audio (EXISTS, not yet verified on an iPhone). The desktop CLI still uses `afplay` |
 | Voice in | None (PROPOSED) |
 | Transport | FastAPI REST plus WebSocket (EXISTS) |
 | Frontend | React/Vite (EXISTS) |
@@ -320,11 +320,12 @@ Client to server:
 - `select_move {move_id}`
 
 Server to client:
+- `coach_cue {cue, turn_id}` (EXISTS). Caption text, sent before the matching `coach_audio_chunk`, so it still shows if TTS fails or times out.
 - `state {phase, move_id, attempt_id?}`
 - `stt_partial {turn_id, text}` / `stt_final {turn_id, text}`
 - `coach_turn_start {turn_id, mode}`
 - `coach_text_delta {turn_id, text}`
-- `coach_audio_chunk {turn_id, seq, codec}` (binary)
+- `coach_audio_chunk {turn_id, seq, codec, final}` (binary). EXISTS: one chunk per cue, codec `wav` (16-bit mono). Frame layout: 2-byte big-endian header length, UTF-8 JSON header, then the audio bytes. See `backend/app/audio_frames.py`.
 - `coach_turn_end {turn_id, interrupted}`
 - `attempt_result {attempt_id, score, joints, freezes}`
 - `error {code, message, recoverable}`
