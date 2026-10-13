@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useCamera }    from "../hooks/useCamera";
+import { useCoachAudio } from "../hooks/useCoachAudio";
 import ScoreHUD         from "../components/ScoreHUD";
 import KeyframeFlash    from "../components/KeyframeFlash";
 import SkeletonCanvas   from "../components/SkeletonCanvas";
@@ -32,8 +33,15 @@ export default function Session({ sessionId, onEnd }) {
     onEnd();
   };
 
+  // Coach audio comes from the backend over the WebSocket.
+  const { unlocked: soundOn, unlock: unlockSound, playChunk, setLatestTurn } = useCoachAudio();
+
   const handleMessage = useCallback((msg) => {
-    if (msg.type === "coach_cue") { setCoachCue(msg.cue); return; }
+    if (msg.type === "coach_cue") {
+      setCoachCue(msg.cue);
+      setLatestTurn(msg.turn_id);
+      return;
+    }
     if (msg.type !== "frame") return;
     if (msg.freeze) {
       setFreezeLive(msg.freeze.live);
@@ -53,10 +61,20 @@ export default function Session({ sessionId, onEnd }) {
     if (msg.guidance    !== undefined)  setGuidance(msg.guidance);
     if (msg.stats)                      setStats(msg.stats);
     if (msg.score_result)               setScoreResult(msg.score_result);
-  }, []);
+  }, [setLatestTurn]);
+
+  // Browsers (iOS Safari above all) need a tap before they play sound, so try
+  // to unlock on mount and on any tap, and show a SOUND button until it works.
+  useEffect(() => {
+    unlockSound().catch(() => {});
+    if (soundOn) return;
+    const onTap = () => { unlockSound().catch(() => {}); };
+    window.addEventListener("pointerdown", onTap);
+    return () => window.removeEventListener("pointerdown", onTap);
+  }, [soundOn, unlockSound]);
 
   const onWsOpen  = useCallback(() => setWsReady(true), []);
-  const { sendFrame, canSend } = useWebSocket(sessionId, handleMessage, onWsOpen);
+  const { sendFrame, canSend } = useWebSocket(sessionId, handleMessage, onWsOpen, playChunk);
 
   // Only send. The debug view now shows the live <video> element directly,
   // so we no longer re-render the whole page with a base64 image every frame.
@@ -103,6 +121,20 @@ export default function Session({ sessionId, onEnd }) {
           }}>
             {aligned ? "ALIGNED" : displayName ? displayName : "DETECTING..."}
           </div>
+
+          {!soundOn && (
+            <button
+              onClick={() => unlockSound().catch(() => {})}
+              style={{
+                background: "#1a0606", border: "1px solid #ff2d2d",
+                color: "#ff2d2d", padding: "4px 14px",
+                fontFamily: "'Anton',sans-serif",
+                fontSize: 10, letterSpacing: "0.15em", cursor: "pointer",
+              }}
+            >
+              TAP FOR SOUND
+            </button>
+          )}
 
           <button
             onClick={() => setDebugMode((d) => !d)}

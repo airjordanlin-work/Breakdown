@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import random
 import subprocess
 import tempfile
@@ -61,6 +62,7 @@ class VoiceCoach:
         self._last_spoken: float = 0.0
         self._thread: threading.Thread | None = None
         self._lock               = threading.Lock()
+        self._synth_lock         = threading.Lock()   # Kokoro is not shared across threads
         self._kokoro             = None
         self._available          = False
         self._recent: list[str]  = []   # tracks recently used phrases to avoid repetition
@@ -107,17 +109,46 @@ class VoiceCoach:
         self._gender = gender
         print(f"VoiceCoach: switched to {gender} ({VOICE_MAP[gender]})")
 
-    def _speak_async(self, text: str) -> None:
-        """Generate and play audio on a daemon thread — never blocks render loop."""
-        kokoro = self._kokoro
-        voice  = VOICE_MAP[self._gender]
+    @property
+    def available(self) -> bool:
+        return self._available
 
+    def synthesize_wav(self, text: str) -> bytes | None:
+        """Render text to 16-bit mono WAV bytes, or None if TTS is unavailable.
+
+        This is the phone path: the server sends these bytes to the browser
+        instead of playing them on the server. Blocking, so call it from a
+        worker thread.
+        """
+        if not self._available or not text:
+            return None
+        try:
+            import soundfile as sf
+            with self._synth_lock:
+                samples, sample_rate = self._kokoro.create(
+                    text, voice=VOICE_MAP[self._gender], speed=1.0
+                )
+            buf = io.BytesIO()
+            sf.write(buf, samples, sample_rate, format="WAV", subtype="PCM_16")
+            return buf.getvalue()
+        except Exception as e:
+            print(f"VoiceCoach synth error: {e}")
+            return None
+
+    def _speak_async(self, text: str) -> None:
+        """Generate and play audio locally on a daemon thread (desktop CLI only).
+
+        Uses macOS afplay, so it never reaches a phone. The web server uses
+        synthesize_wav() and streams the audio to the client instead.
+        """
         def run() -> None:
+            wav = self.synthesize_wav(text)
+            if wav is None:
+                return
             try:
-                import soundfile as sf
-                samples, sample_rate = kokoro.create(text, voice=voice, speed=1.0)
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as f:
-                    sf.write(f.name, samples, sample_rate)
+                    f.write(wav)
+                    f.flush()
                     subprocess.run(["afplay", f.name], timeout=10)
             except Exception as e:
                 print(f"VoiceCoach error: {e}")

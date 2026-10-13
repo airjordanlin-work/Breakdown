@@ -4,10 +4,12 @@ import { useRef, useCallback, useEffect } from "react";
 // Prevents the pipeline from freezing if one response never arrives.
 const STALE_MS = 1000;
 
-export function useWebSocket(sessionId, onMessage, onOpen) {
+// onBinary receives binary frames (coach audio chunks) as ArrayBuffers.
+export function useWebSocket(sessionId, onMessage, onOpen, onBinary) {
   const ws        = useRef(null);
   const onOpenRef = useRef(onOpen);
   const onMsgRef  = useRef(onMessage);
+  const onBinRef  = useRef(onBinary);
 
   // Backpressure state: is a frame currently being processed by the backend?
   const inFlight  = useRef(false);
@@ -15,15 +17,18 @@ export function useWebSocket(sessionId, onMessage, onOpen) {
 
   useEffect(() => { onOpenRef.current = onOpen; }, [onOpen]);
   useEffect(() => { onMsgRef.current  = onMessage; }, [onMessage]);
+  useEffect(() => { onBinRef.current  = onBinary; }, [onBinary]);
 
   useEffect(() => {
     if (!sessionId) return;
     ws.current = new WebSocket(`ws://localhost:8000/ws/${sessionId}`);
+    ws.current.binaryType = "arraybuffer";
     ws.current.onopen = () => {
       inFlight.current = false;
       onOpenRef.current?.();
     };
     ws.current.onmessage = (e) => {
+      if (e.data instanceof ArrayBuffer) { onBinRef.current?.(e.data); return; }
       const msg = JSON.parse(e.data);
       if (msg.type === "frame" || msg.error) {
         // Backend finished the frame we sent, so we're free to send the next one.

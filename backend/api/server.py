@@ -30,6 +30,7 @@ from app.dtw_engine import DTWEngine
 from app.scorer import Scorer
 from app.coach import AICoach
 from app.voice import VoiceCoach
+from app.audio_frames import encode_audio_chunk
 from app.imu_protocol import PacketError, unpack_forwarded
 from app.imu_store import ImuStore
 from app.freeze_monitor import FreezeMonitor
@@ -48,6 +49,12 @@ REFERENCE_DIR  = Path(__file__).resolve().parent.parent / "reference_moves"
 KEYFRAME_FLASH = 30
 _sessions: dict[str, "CoachingSession"] = {}
 _executor      = ThreadPoolExecutor(max_workers=4)
+# TTS gets its own small pool so a slow synth never steals a pose-frame slot.
+# Two workers let two sessions synthesize at once; each VoiceCoach serializes
+# its own Kokoro calls. The timeout below includes queue time on purpose: audio
+# that arrives after the deadline is stale for a live cue.
+_tts_executor  = ThreadPoolExecutor(max_workers=2)
+TTS_TIMEOUT_SECONDS = 5.0
 
 # One shared IMU store for the whole server: there's one physical device.
 # The /ws/imu endpoint writes into it; frame processing reads from it.
@@ -259,14 +266,39 @@ class CoachingSession:
             },
         }
 
-    def speak(self, cue: str) -> None:
-        """Speak a cue through Kokoro TTS."""
-        if self.voice and cue:
-            self.voice.speak(cue)
-
     def close(self) -> None:
         self.estimator.close()
         self.engine.shutdown()
+
+
+async def send_coach_cue(
+    websocket: WebSocket,
+    voice: Optional[VoiceCoach],
+    cue: str,
+    timeout: float = TTS_TIMEOUT_SECONDS,
+) -> bool:
+    """Send a coach cue to the client: caption text first, then the spoken audio.
+
+    Text goes first so the caption shows even when TTS is slow, missing or
+    fails. Returns True if audio was sent.
+    """
+    turn_id = uuid.uuid4().hex[:12]
+    await websocket.send_text(json.dumps({"type": "coach_cue", "cue": cue, "turn_id": turn_id}))
+
+    if voice is None or not voice.available:
+        return False
+    loop = asyncio.get_running_loop()
+    try:
+        wav = await asyncio.wait_for(
+            loop.run_in_executor(_tts_executor, voice.synthesize_wav, cue), timeout
+        )
+    except asyncio.TimeoutError:
+        print(f"TTS timed out after {timeout}s, sent text only: '{cue}'")
+        return False
+    if not wav:
+        return False
+    await websocket.send_bytes(encode_audio_chunk(turn_id, wav))
+    return True
 
 
 @app.get("/health")
@@ -370,16 +402,11 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                             freeze       = ctx.get("freeze"),
                         )
                         if cue:
-                            # speak through Kokoro
-                            session.speak(cue)
-                            # also send to frontend for display
+                            # caption + Kokoro audio, streamed to the client
                             try:
-                                await websocket.send_text(json.dumps({
-                                    "type": "coach_cue",
-                                    "cue":  cue,
-                                }))
+                                await send_coach_cue(websocket, session.voice, cue)
                             except Exception:
-                                pass
+                                pass  # socket closed mid-send
 
                     asyncio.create_task(_fire_cue())
 
