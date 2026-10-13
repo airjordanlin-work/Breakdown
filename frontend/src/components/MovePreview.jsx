@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { drawFigure, drawSkeleton, lerpPose } from "../render/figure";
-import { API } from "../api";
+import { apiFetch } from "../api";
 
 const cache = new Map();          // move id -> preview data, so switching back is instant
 const TRAIL = 4;                  // afterimages drawn behind the current pose
@@ -35,7 +35,7 @@ export default function MovePreview({ moveId, title }) {
     if (cache.has(moveId)) { setData(cache.get(moveId)); return; }
     setData(null);
     let cancelled = false;
-    fetch(`${API}/moves/${moveId}/preview`)
+    apiFetch(`/moves/${moveId}/preview`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((d) => { cache.set(moveId, d); if (!cancelled) setData(d); })
       .catch(() => { if (!cancelled) setError("Preview unavailable for this move."); });

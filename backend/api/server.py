@@ -7,7 +7,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -16,8 +15,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -32,32 +30,25 @@ from app.dtw_engine import DTWEngine
 from app.scorer import Scorer
 from app.coach import AICoach
 from app.voice import VoiceCoach
+from app.access import configured_token, require_token
 from app.audio_frames import encode_audio_chunk
 from app.imu_protocol import PacketError, unpack_forwarded
 from app.imu_store import ImuStore
 from app.freeze_monitor import FreezeMonitor
 from app.move_catalog import load_catalog, preview as move_preview
 
-load_dotenv()
-
-DEFAULT_CORS_ORIGINS = ["http://localhost:5173", "http://localhost:3000"]
-
-
-def cors_origins(raw: Optional[str]) -> list[str]:
-    """Origins allowed to call the API directly, from a comma-separated CORS_ORIGINS.
-
-    The Vite dev server proxies /api on the same origin, so phones over an HTTPS
-    tunnel don't need an entry here. This is for clients that call :8000 directly.
-    """
-    if not raw or not raw.strip():
-        return list(DEFAULT_CORS_ORIGINS)
-    return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
-
-
-app = FastAPI(title="Breakdance Coach API")
+# Every route needs the shared ACCESS_TOKEN when one is set.
+# The interactive docs are off so they cannot be used to browse the API.
+app = FastAPI(
+    title="Breakdance Coach API",
+    dependencies=[Depends(require_token)],
+    docs_url=None, redoc_url=None, openapi_url=None,
+)
+if not configured_token():
+    print("WARNING: ACCESS_TOKEN is not set. Do not expose this server through a tunnel until you set it.")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins(os.getenv("CORS_ORIGINS")),
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

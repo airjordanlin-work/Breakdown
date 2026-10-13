@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import MovePreview from "../components/MovePreview";
 import "../styles/move-library.css";
-import { API } from "../api";
+import { apiFetch } from "../api";
 
 const TIERS = ["Beginner", "Intermediate", "Advanced"];
 const STATS = [
@@ -31,7 +31,7 @@ function useSensorStatus() {
   useEffect(() => {
     let alive = true;
     const check = () =>
-      fetch(`${API}/imu/status`)
+      apiFetch(`/imu/status`)
         .then((r) => r.json())
         .then((s) => alive && setConnected(Boolean(s.connected)))
         .catch(() => alive && setConnected(false));
@@ -51,7 +51,7 @@ export default function MoveLibrary({ onStart }) {
 
   const load = useCallback(() => {
     setError(null);
-    fetch(`${API}/moves`)
+    apiFetch(`/moves`)
       .then((r) => r.json())
       .then((d) => {
         setMoves(d.moves);

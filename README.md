@@ -134,7 +134,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173. The frontend sends every backend request (REST and WebSocket) to `/api` on its own origin, and Vite forwards it to the backend on port 8000. Set `BACKEND_URL` to point the proxy elsewhere.
+Open http://localhost:5173. The frontend sends every backend request (REST and WebSocket) to `/api` on its own origin, and Vite forwards it to the backend on port 8000. Set `BACKEND_URL` to point the proxy elsewhere. The IMU bridge reads `ACCESS_TOKEN` from the environment too.
 
 #### On a phone (PROPOSED, not yet verified on a device)
 
@@ -144,7 +144,9 @@ Phone browsers only allow the camera over HTTPS, so put a tunnel in front of the
 cloudflared tunnel --url http://localhost:5173
 ```
 
-Open the `https://...trycloudflare.com` address it prints on the phone. One tunnel is enough because the backend is reached through `/api` on the same address. ngrok works too (`ngrok http 5173`).
+**The tunnel URL is public while it runs.** Anyone who has it can reach the backend, which can use your Anthropic key and your webcam. Before you start a tunnel, set `ACCESS_TOKEN` in `.env` (see `.env.example` for a one-line way to generate one) and restart the backend. Every REST call and WebSocket then needs the token, and requests without it get a 401. Stop the tunnel when you are done.
+
+Open the `https://...trycloudflare.com` address it prints on the phone, with your token added once: `https://...trycloudflare.com/?token=YOUR_TOKEN`. The browser saves the token and removes it from the address bar. For a custom tunnel hostname, run `ALLOWED_HOSTS=coach.example.com npm run dev` (comma-separated for several). One tunnel is enough because the backend is reached through `/api` on the same address. ngrok works too (`ngrok http 5173`).
 
 ### 3. AI coach and voice (optional)
 

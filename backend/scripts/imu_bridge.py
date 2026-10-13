@@ -17,10 +17,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import os
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 import websockets
 from bleak import BleakClient, BleakScanner
@@ -43,6 +45,14 @@ from app.imu_protocol import (  # noqa: E402
 
 RECORDINGS_DIR = _ROOT / "recordings"
 DEFAULT_BACKEND_URL = "ws://localhost:8000/ws/imu"
+
+
+def _with_token(url: str) -> str:
+    """Append ACCESS_TOKEN from the environment so the backend accepts the bridge."""
+    token = os.getenv("ACCESS_TOKEN", "").strip()
+    if not token or "token=" in url:
+        return url
+    return f"{url}{'&' if '?' in url else '?'}token={quote(token)}"
 CSV_HEADER = [
     "host_time", "seq", "device_ms",
     "wrist_ok", "w_ax", "w_ay", "w_az", "w_gx", "w_gy", "w_gz",
@@ -88,7 +98,7 @@ class Forwarder:
         warned = False
         while True:
             try:
-                async with websockets.connect(self.url) as ws:
+                async with websockets.connect(_with_token(self.url)) as ws:
                     self.connected = True
                     warned = False
                     print(f"Forwarding to {self.url}")

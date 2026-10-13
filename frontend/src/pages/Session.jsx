@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useCamera }    from "../hooks/useCamera";
 import { useCoachAudio } from "../hooks/useCoachAudio";
-import { API }           from "../api";
+import { apiFetch }           from "../api";
 import ScoreHUD         from "../components/ScoreHUD";
 import KeyframeFlash    from "../components/KeyframeFlash";
 import SkeletonCanvas   from "../components/SkeletonCanvas";
@@ -30,7 +30,7 @@ export default function Session({ sessionId, onEnd }) {
   const [freezeDebug, setFreezeDebug] = useState(null);
 
   const handleEnd = async () => {
-    await fetch(`${API}/session/${sessionId}`, { method: "DELETE" });
+    await apiFetch(`/session/${sessionId}`, { method: "DELETE" });
     onEnd();
   };
 
