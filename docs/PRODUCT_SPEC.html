@@ -320,6 +320,7 @@ Client to server:
 - `select_move {move_id}`
 
 Server to client:
+- `frame {..., tracked, moving, score_result}` (EXISTS). `tracked` is true when a body is reliably detected in this frame, `moving` when the dancer is moving (median joint travel over the last 15 buffered frames, see `backend/app/activity.py`). The coach stays silent and nothing is scored unless both are true. Each `score_result.results` entry carries `fix`: `straighten` or `bend`, the direction the joint needs to go.
 - `coach_cue {cue, turn_id}` (EXISTS). Caption text, sent before the matching `coach_audio_chunk`, so it still shows if TTS fails or times out.
 - `voice_status {available, reason}` (EXISTS). Sent once when the socket opens. `reason` says why coach audio is off (for example the Kokoro model file is missing); the UI shows it.
 - `coach_audio_skipped {turn_id, reason}` (EXISTS). Sent after a `coach_cue` caption when no audio follows (TTS missing, timed out or failed).

@@ -227,16 +227,15 @@ def _grounding_flags(prompt: str, cue: str) -> list[str]:
 def _scenarios():
     from app.coach import _build_freeze_prompt, _build_prompt
 
-    miss = lambda j, d: {"results": [{"joint": j, "tier": "Miss", "diff": d}]}
+    miss = lambda j, fix: {"results": [{"joint": j, "tier": "Miss", "diff": 40.0, "fix": fix}]}
     return [
-        ("pre_body", _build_prompt("br_01", False, 0.4, None, None)),
-        ("not_aligned", _build_prompt("br_01", False, 1.0, None, None)),
-        ("miss_left_elbow", _build_prompt("br_01", True, 1.0, miss("left_elbow", 42.0), None)),
-        ("miss_right_knee", _build_prompt("br_01", True, 1.0, miss("right_knee", -35.0), None)),
-        ("close_left_shoulder", _build_prompt("br_01", True, 1.0,
-            {"results": [{"joint": "left_shoulder", "tier": "Close", "diff": 22.0}]}, None)),
-        ("all_perfect", _build_prompt("br_01", True, 1.0,
-            {"results": [{"joint": "left_elbow", "tier": "Perfect", "diff": 4.0}]}, None)),
+        ("moving_no_data", _build_prompt("BR 01", None)),
+        ("miss_left_elbow", _build_prompt("BR 01", miss("left elbow", "straighten"))),
+        ("miss_right_knee", _build_prompt("BR 01", miss("right knee", "bend"))),
+        ("close_left_shoulder", _build_prompt("BR 01",
+            {"results": [{"joint": "left shoulder", "tier": "Close", "diff": 22.0, "fix": "bend"}]})),
+        ("all_perfect", _build_prompt("BR 01",
+            {"results": [{"joint": "left elbow", "tier": "Perfect", "diff": 4.0, "fix": "bend"}]})),
         ("freeze_steady", _build_freeze_prompt(
             {"tier": "steady", "duration_s": 2.4, "stability": 84, "shakiest": "wrist"}, None)),
         ("freeze_wobbly", _build_freeze_prompt(

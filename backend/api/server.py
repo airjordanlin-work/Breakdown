@@ -36,6 +36,7 @@ from app.audio_frames import encode_audio_chunk
 from app.imu_protocol import PacketError, unpack_forwarded
 from app.imu_store import ImuStore
 from app.freeze_monitor import FreezeMonitor
+from app.activity import is_moving
 from app.move_catalog import load_catalog, preview as move_preview
 
 # Every route needs the shared ACCESS_TOKEN when one is set.
@@ -57,6 +58,10 @@ app.add_middleware(
 
 REFERENCE_DIR  = Path(__file__).resolve().parent.parent / "reference_moves"
 KEYFRAME_FLASH = 30
+# Consecutive frames without a tracked body before the pose buffer is cleared,
+# so a stale window is never compared or scored again. A few frames of grace
+# rides out MediaPipe dropping a single frame mid-move.
+LOST_RESET_FRAMES = 10
 _sessions: dict[str, "CoachingSession"] = {}
 _executor      = ThreadPoolExecutor(max_workers=4)
 # TTS gets its own small pool so a slow synth never steals a pose-frame slot.
@@ -154,6 +159,7 @@ class CoachingSession:
         self.last_captured_at: Optional[float] = None
         self.freeze         = FreezeMonitor(_imu_store)
         self.pending_cue: Optional[asyncio.Task] = None
+        self.lost_frames    = 0
 
         dummy = np.zeros((480, 640, 3), dtype=np.uint8)
         self.estimator.process(dummy)
@@ -182,7 +188,9 @@ class CoachingSession:
         pose  = self.estimator.process(rgb, keep_raw=True)
 
         guidance = None
-        if pose is not None and is_pose_reliable(pose):
+        tracked  = pose is not None and is_pose_reliable(pose)
+        if tracked:
+            self.lost_frames = 0
             self.pose_frame = pose
             self.buf.add(pose)
             guidance = _diagnose_visibility(pose)
@@ -190,9 +198,16 @@ class CoachingSession:
             guidance = "No body detected — step into frame"
             if pose is not None:
                 guidance = _diagnose_visibility(pose)
+            self.lost_frames += 1
+            if self.lost_frames == LOST_RESET_FRAMES:
+                # Body gone: drop the old window so it is not compared or
+                # scored again while nobody is dancing.
+                self.buf.clear()
 
-        if self.buf.is_ready() and self.future is None:
-            window      = [f.landmarks for f in self.buf._frames]
+        window = [f.landmarks for f in self.buf._frames]
+        moving = tracked and is_moving(window)
+
+        if tracked and self.buf.is_ready() and self.future is None:
             self.future = self.engine.compare_async(window)
 
         if self.future is not None and self.future.done():
@@ -202,7 +217,9 @@ class CoachingSession:
                 self.dtw_result = None
             self.future = None
 
-            if self.dtw_result and self.dtw_result.aligned and self.pose_frame:
+            # Score only a live, moving body. Standing still or out of frame
+            # used to keep scoring the last window over and over.
+            if self.dtw_result and self.dtw_result.aligned and tracked and moving:
                 s = self.scorer.score(self.dtw_result, self.pose_frame)
                 if s is not None:
                     self.score_result  = s
@@ -249,11 +266,15 @@ class CoachingSession:
                         "joint":  r.joint_name.replace("_", " "),
                         "tier":   r.tier,
                         "diff":   round(r.diff, 1),
+                        # which way to move: the joint angle is below or above target
+                        "fix":    "straighten" if r.actual_angle < r.target_angle else "bend",
                         "points": round(r.points_earned),
                     }
                     for r in self.score_result.results
                 ],
             }
+
+        ref_meta = self._move_meta(move_name)
 
         return {
             "type":         "frame",
@@ -269,6 +290,8 @@ class CoachingSession:
             "fill_ratio":   round(fill_ratio, 3),
             "move_name":    move_name or "",
             "guidance":     guidance,
+            "tracked":      tracked,
+            "moving":       moving,
             "stats": {
                 "total_points": round(stats.total_points),
                 "grade":        stats.grade,
@@ -282,13 +305,19 @@ class CoachingSession:
             "freeze":       freeze,
             # snapshot for AI coach — passed separately in ws handler
             "_coach_context": {
-                "move_name":    move_name or "",
-                "aligned":      bool(self.dtw_result.aligned) if self.dtw_result else False,
+                "move_name":    ref_meta.get("display_name") or (move_name or "").replace("_", " ").upper(),
+                "move_tips":    list(ref_meta.get("tips", [])),
+                "tracked":      tracked,
+                "moving":       moving,
                 "fill_ratio":   round(fill_ratio, 3),
                 "score_result": score_payload,
                 "freeze":       freeze["result"],
             },
         }
+
+    def _move_meta(self, move_name: Optional[str]) -> dict:
+        move = self.engine.get_move(move_name) if move_name else None
+        return move.meta if move is not None else {}
 
     def close(self) -> None:
         with self._lock:
@@ -466,18 +495,20 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                 # everything else waits for the normal cooldown.
                 coach = session.ai_coach
                 freeze_result = coach_ctx.get("freeze")
+                # Nothing is said while no body is tracked or the dancer is still.
                 fire = coach.can_fire_now() if freeze_result else coach.should_fire(
-                    aligned=coach_ctx.get("aligned", False),
+                    tracked=coach_ctx.get("tracked", False),
+                    moving=coach_ctx.get("moving", False),
                     fill_ratio=coach_ctx.get("fill_ratio", 0),
+                    has_score=bool(coach_ctx.get("score_result")),
                 )
                 if fire:
                     async def _fire_cue(ctx=coach_ctx):
                         cue = await session.ai_coach.get_cue(
                             move_name    = ctx.get("move_name", ""),
-                            aligned      = ctx.get("aligned", False),
-                            fill_ratio   = ctx.get("fill_ratio", 0),
                             score_result = ctx.get("score_result"),
                             freeze       = ctx.get("freeze"),
+                            move_tips    = ctx.get("move_tips"),
                         )
                         if cue:
                             # caption + Kokoro audio, streamed to the client
