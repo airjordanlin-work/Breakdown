@@ -234,7 +234,7 @@ export default function Session({ sessionId, onEnd }) {
               </div>
             </div>
           ) : debugMode ? (
-            <div style={{ position:"absolute", top:12, left:12, zIndex:2,
+            <div className="sess-debug" style={{ position:"absolute", top:12, left:12, zIndex:2,
               fontSize:10, letterSpacing:"0.2em", color:"#ff2d2d" }}>
               <div>ROUND TRIP {latencyMs ?? "--"} MS</div>
               <div>

@@ -112,12 +112,31 @@
 
   .sess-side { display: none; }
 
+  /* Keep the view out from under the notch / home indicator. */
+  .sess-main {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  /* Debug readout sits under the score chip, wrapped inside the view. */
+  .sess-debug {
+    top: 52px !important;
+    left: 8px !important;
+    max-width: calc(100% - 16px);
+    font-size: 9px !important;
+    letter-spacing: 0.12em !important;
+    line-height: 1.5;
+    padding: 4px 8px;
+    background: rgba(6, 6, 8, 0.8);
+    pointer-events: none;
+  }
+
   .sess-chip {
     display: flex;
     gap: 10px;
     position: absolute;
     top: 8px;
-    left: max(8px, env(safe-area-inset-left));
+    left: 8px;
     z-index: 3;
     padding: 4px 10px;
     font-size: 15px;
@@ -129,7 +148,7 @@
   .freeze-meter {
     top: 8px !important;
     left: auto !important;
-    right: max(8px, env(safe-area-inset-right)) !important;
+    right: 8px !important;
     z-index: 3;
     transform: none !important;
     min-width: 0 !important;
@@ -137,7 +156,7 @@
   }
   .keyframe-flash {
     top: 64px !important;
-    right: max(8px, env(safe-area-inset-right)) !important;
+    right: 8px !important;
     z-index: 3;
     min-width: 0 !important;
     padding: 8px 12px !important;
@@ -154,6 +173,26 @@
 
 /* Landscape phone: outline beside the text so both fit. */
 @media (max-height: 500px) and (pointer: coarse) {
-  .framing-guide { flex-direction: row; gap: 28px; }
-  .framing-outline { height: 78%; }
+  .sess-top { padding-top: max(4px, env(safe-area-inset-top)); padding-bottom: 4px; }
+  .sess-btn { min-height: 36px; }
+
+  /* The camera panel is 4:3 and centered, so size the guide to it and keep
+     its text inside, instead of spanning the whole (wider) view. */
+  .framing-guide {
+    inset: 0 auto;
+    left: 50%;
+    transform: translateX(-50%);
+    height: 100%;
+    aspect-ratio: 4 / 3;
+    max-width: 100%;
+    flex-direction: row;
+    gap: 16px;
+    padding: 8px 12px;
+    box-sizing: border-box;
+  }
+  .framing-outline { height: 70%; flex-shrink: 0; }
+  .framing-text { min-width: 0; flex: 1; }
+  .framing-title { font-size: 10px; }
+  .framing-problem { font-size: 15px; overflow-wrap: anywhere; }
+  .framing-hint { display: none; }
 }
