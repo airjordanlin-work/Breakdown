@@ -15,7 +15,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -30,13 +30,22 @@ from app.dtw_engine import DTWEngine
 from app.scorer import Scorer
 from app.coach import AICoach
 from app.voice import VoiceCoach
+from app.access import configured_token, require_token
 from app.audio_frames import encode_audio_chunk
 from app.imu_protocol import PacketError, unpack_forwarded
 from app.imu_store import ImuStore
 from app.freeze_monitor import FreezeMonitor
 from app.move_catalog import load_catalog, preview as move_preview
 
-app = FastAPI(title="Breakdance Coach API")
+# Every route needs the shared ACCESS_TOKEN when one is set.
+# The interactive docs are off so they cannot be used to browse the API.
+app = FastAPI(
+    title="Breakdance Coach API",
+    dependencies=[Depends(require_token)],
+    docs_url=None, redoc_url=None, openapi_url=None,
+)
+if not configured_token():
+    print("WARNING: ACCESS_TOKEN is not set. Do not expose this server through a tunnel until you set it.")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://localhost:3000"],
