@@ -51,6 +51,14 @@ Tiers: at least 75% of the reference is Perfect, at least 50% is Close, below th
 5. **Text chat (PROPOSED).** FR-15 text chat can route "show me" to the same request.
 6. **Later (PROPOSED).** Side-by-side: the demo figure next to the dancer's last rep, both slowed down, with the focus joint ringed on each.
 
+## Voice
+
+Nothing here depends on the TTS engine. Cues, debriefs and the demo line are text that goes through `send_coach_cue` to whatever `VoiceCoach` the session holds. Kokoro stays for the M1 demo. If TTS later moves to a GPU server (for example Chatterbox), only the voice backend changes, and it should sit behind a setting so the two can be benchmarked side by side on time to first audio.
+
+## Sequencing
+
+Jordan decided on 2026-10-14 to merge PRs 31, 32 and 33 before this work goes further. PR 34 stays a draft until then, then gets rebased on main and retargeted so CI runs.
+
 ## AIST++ license check (needed before sharing the app publicly)
 
 The demo animates the same converted AIST++ keypoints the move library preview already shows, and those files are already committed. Before a public demo or app store build, confirm the AIST++ annotation license terms on the [AIST++ site](https://google.github.io/aichoreographer/) and add the required credit to the README. The source AIST Dance Video Database videos have their own terms; this app does not use or ship the videos.
