@@ -12,6 +12,7 @@ What it checks:
   limb was measured.
 - numbers: digits and the words two to twenty must equal a number in the
   facts. "one" is skipped because it is mostly a pronoun ("that's the one").
+- rotation: "twist" or "rotate" needs a measured hip twist in the facts.
 - banned claims: angles, degrees, points, grades, percentages, and any
   comparison to earlier sessions, since nothing from past sessions is stored.
 
@@ -59,6 +60,10 @@ _BANNED = re.compile(
     r"improv\w*|personal best)\b|%|°",
     re.IGNORECASE,
 )
+
+
+# Rotation words claim the hips or torso turned; only a measured twist allows them.
+_ROTATION = re.compile(r"\b(twist\w*|rotat\w*)\b", re.IGNORECASE)
 
 
 def _walk(value: Any) -> Iterable[Any]:
@@ -118,6 +123,10 @@ def ungrounded_claims(text: str, facts: dict) -> list[str]:
                 flags.append(f"body part not in facts: {m.group(0)!r}")
         elif not any(p in allowed_text for p in _LIMB_OF.get(part, (part,))):
             flags.append(f"body part not in facts: {m.group(0)!r}")
+
+    if "twist" not in allowed_text:
+        for m in _ROTATION.finditer(said):
+            flags.append(f"rotation not measured: {m.group(0)!r}")
 
     allowed = _allowed_numbers(facts)
     for m in _NUMBER_RE.finditer(said):

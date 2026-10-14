@@ -265,8 +265,9 @@ def test_reference_dancer_scores_a_clean_rep():
     dtw = compare_to_move(move.sequence, move)
     result = Scorer(REF_DIR).score_rep(dtw, window)
     assert result is not None
+    # br_01's meta also asks for the whole-rep hip twist and leg reach
     assert {r.joint_name for r in result.results} == {
-        "left_elbow", "right_elbow", "left_knee", "right_knee"}
+        "left_elbow", "right_elbow", "left_knee", "right_knee", "hips", "leg"}
     assert all(r.tier == PERFECT and r.diff < 1e-3 for r in result.results)
 
 

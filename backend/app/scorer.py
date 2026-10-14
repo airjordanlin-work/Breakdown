@@ -21,6 +21,7 @@ from typing import Any, Optional, Sequence
 import numpy as np
 
 from app.dtw_engine import DTWResult
+from app.move_features import compare as compare_features
 from app.pose_estimator import PoseFrame
 
 PERFECT = "Perfect"
@@ -46,6 +47,15 @@ class KeyframeResult:
     diff: float
     tier: str
     points_earned: float
+    # Which way to move. None for joint angles: derived from actual vs target.
+    # Whole-rep features set it ("twist", "reach"), since their values are not angles.
+    fix: Optional[str] = None
+
+    @property
+    def fix_direction(self) -> str:
+        if self.fix:
+            return self.fix
+        return "straighten" if self.actual_angle < self.target_angle else "bend"
 
 
 @dataclass(frozen=True)
@@ -164,6 +174,16 @@ def _load_keyframes(reference_dir: Path, move_name: str) -> list[_KeyframeSpec]:
         if joints:
             specs.append(_KeyframeSpec(frame=frame, joints=joints))
     return specs
+
+
+def _load_features(reference_dir: Path, move_name: str) -> list[str]:
+    """Whole-rep feature names a move opts into via ``features`` in its meta."""
+    meta_path = reference_dir / f"{move_name}_meta.json"
+    if not meta_path.exists():
+        return []
+    with meta_path.open(encoding="utf-8") as f:
+        names = json.load(f).get("features", [])
+    return [str(n) for n in names] if isinstance(names, list) else []
 
 
 def _reference_frame_index(dtw_result: DTWResult, live_frame_index: int) -> Optional[int]:
@@ -295,8 +315,7 @@ class Scorer:
         counts = Counter(r.joint_name for r in off)
         worst = max(counts, key=lambda j: (counts[j], sum(r.diff for r in off if r.joint_name == j)))
         latest = [r for r in off if r.joint_name == worst][-1]
-        fix = "straighten" if latest.actual_angle < latest.target_angle else "bend"
-        return worst, fix
+        return worst, latest.fix_direction
 
     def stats(self) -> SessionStats:
         """Return an immutable snapshot of current session totals."""
@@ -371,7 +390,37 @@ class Scorer:
             diff = float(np.mean([abs(v[2]) for v in vals]))
             tier, points = _score_tier(diff, thresholds[name])
             joint_results.append(KeyframeResult(name, actual, target, diff, tier, points))
+        joint_results.extend(self._feature_results(dtw_result.move_name, window, reference))
         return self._record(joint_results, dtw_result.move_name)
+
+    def _feature_results(
+        self,
+        move_name: str,
+        window: Sequence[np.ndarray],
+        reference: Optional[np.ndarray],
+    ) -> list[KeyframeResult]:
+        """Whole-rep features (hip twist, leg reach) the move's meta asks for.
+
+        ``diff`` is how far short of the reference the rep fell, in percent,
+        so a feature and a joint angle can be ranked against each other.
+        """
+        names = _load_features(self.reference_dir, move_name)
+        if not names or reference is None or len(window) == 0:
+            return []
+        live = np.asarray(window, dtype=np.float32).reshape(-1, 33, 3)
+        points = {PERFECT: PERFECT_POINTS, CLOSE: CLOSE_POINTS, MISS: MISS_POINTS}
+        return [
+            KeyframeResult(
+                joint_name=f.body_part,
+                actual_angle=f.live,
+                target_angle=f.reference,
+                diff=max(0.0, 1.0 - f.ratio) * 100.0,
+                tier=f.tier,
+                points_earned=points[f.tier],
+                fix=f.fix,
+            )
+            for f in compare_features(names, live, reference)
+        ]
 
     def _record(self, joint_results: list[KeyframeResult], move_name: str) -> ScoreResult:
         """Update every tally for one scored attempt and return its result."""
