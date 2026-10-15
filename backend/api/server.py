@@ -142,6 +142,11 @@ class SessionClosed(Exception):
     """The session was ended (DELETE /session) while its socket was still sending frames."""
 
 
+def _track(session: "CoachingSession", task: asyncio.Task) -> None:
+    session.coach_tasks.add(task)
+    task.add_done_callback(session.coach_tasks.discard)
+
+
 def _score_payload(result) -> dict:
     """One scored rep as the client (and the coach) see it."""
     return {
@@ -186,6 +191,11 @@ class CoachingSession:
         self.frames_since_rep = 0
         self.future_window: list = []
         self.attempts       = AttemptTracker()
+        # One coach line at a time: a debrief waits for a live cue still in
+        # flight instead of talking over it. Tasks are kept so they can't be
+        # garbage-collected mid-flight.
+        self.speak_lock     = asyncio.Lock()
+        self.coach_tasks: set[asyncio.Task] = set()
         self.previous_rep: Optional[dict] = None   # payload of the rep before the latest one
         self.latest_rep: Optional[dict] = None
 
@@ -540,16 +550,17 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                 if debrief_reps:
                     # The dancer just stopped: one debrief for that attempt.
                     async def _fire_debrief(ctx=coach_ctx, reps=debrief_reps):
-                        text = await session.ai_coach.get_debrief(
-                            ctx.get("move_name", ""), reps, ctx.get("session_totals"),
-                        )
-                        if text:
-                            try:
-                                await send_coach_cue(websocket, session.voice, text, mode="debrief")
-                            except Exception:
-                                pass  # socket closed mid-send
+                        async with session.speak_lock:
+                            text = await session.ai_coach.get_debrief(
+                                ctx.get("move_name", ""), reps, ctx.get("session_totals"),
+                            )
+                            if text:
+                                try:
+                                    await send_coach_cue(websocket, session.voice, text, mode="debrief")
+                                except Exception as e:
+                                    print(f"Debrief not sent (socket closed?): {e}")
 
-                    asyncio.create_task(_fire_debrief())
+                    _track(session, asyncio.create_task(_fire_debrief()))
                     continue
 
                 freeze_result = coach_ctx.get("freeze")
@@ -562,22 +573,23 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                 )
                 if fire:
                     async def _fire_cue(ctx=coach_ctx):
-                        cue = await session.ai_coach.get_cue(
-                            move_name    = ctx.get("move_name", ""),
-                            score_result = ctx.get("score_result"),
-                            freeze       = ctx.get("freeze"),
-                            move_tips    = ctx.get("move_tips"),
-                            previous_result = ctx.get("previous_result"),
-                            clean_streak = ctx.get("clean_streak", 0),
-                        )
-                        if cue:
-                            # caption + Kokoro audio, streamed to the client
-                            try:
-                                await send_coach_cue(websocket, session.voice, cue)
-                            except Exception:
-                                pass  # socket closed mid-send
+                        async with session.speak_lock:
+                            cue = await session.ai_coach.get_cue(
+                                move_name    = ctx.get("move_name", ""),
+                                score_result = ctx.get("score_result"),
+                                freeze       = ctx.get("freeze"),
+                                move_tips    = ctx.get("move_tips"),
+                                previous_result = ctx.get("previous_result"),
+                                clean_streak = ctx.get("clean_streak", 0),
+                            )
+                            if cue:
+                                # caption + Kokoro audio, streamed to the client
+                                try:
+                                    await send_coach_cue(websocket, session.voice, cue)
+                                except Exception:
+                                    pass  # socket closed mid-send
 
-                    asyncio.create_task(_fire_cue())
+                    _track(session, asyncio.create_task(_fire_cue()))
 
             elif msg.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})

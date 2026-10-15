@@ -107,16 +107,20 @@ def ungrounded_claims(text: str, facts: dict) -> list[str]:
         flags.append(f"banned claim: {m.group(0)!r}")
 
     allowed_text = _facts_text(facts)
+
+    def in_facts(phrase: str) -> bool:
+        # whole words only, so "hip" is not grounded by "ship" or "arm" by "warm"
+        return re.search(rf"\b{re.escape(phrase)}s?\b", allowed_text) is not None
+
     for m in _BODY_RE.finditer(said):
         side, part = (m.group(1) or "").lower(), m.group(2).lower()
         if part in _GENERIC:
             continue
+        candidates = _LIMB_OF.get(part, (part,))
         if side:
-            if f"{side} {part}" not in allowed_text and not any(
-                f"{side} {j}" in allowed_text for j in _LIMB_OF.get(part, ())
-            ):
+            if not in_facts(f"{side} {part}") and not any(in_facts(f"{side} {j}") for j in candidates):
                 flags.append(f"body part not in facts: {m.group(0)!r}")
-        elif not any(p in allowed_text for p in _LIMB_OF.get(part, (part,))):
+        elif not any(in_facts(p) for p in candidates):
             flags.append(f"body part not in facts: {m.group(0)!r}")
 
     allowed = _allowed_numbers(facts)

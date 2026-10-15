@@ -205,3 +205,32 @@ def test_send_coach_cue_times_out_to_text_only():
     assert time.perf_counter() - start < 0.4
     _, skipped = _caption_then_skip(ws)
     assert "timed out" in skipped["reason"]
+
+
+def test_debrief_waits_for_a_live_cue_in_flight():
+    """A debrief that starts while a live cue is speaking goes after it, not over it."""
+    import asyncio
+    from types import SimpleNamespace
+    from api import server as srv
+
+    order = []
+
+    async def scenario():
+        session = SimpleNamespace(speak_lock=asyncio.Lock(), coach_tasks=set())
+
+        async def speak(name, delay):
+            async with session.speak_lock:
+                order.append(f"{name} start")
+                await asyncio.sleep(delay)
+                order.append(f"{name} end")
+
+        srv._track(session, asyncio.create_task(speak("live", 0.05)))
+        await asyncio.sleep(0)
+        srv._track(session, asyncio.create_task(speak("debrief", 0)))
+        assert len(session.coach_tasks) == 2
+        await asyncio.gather(*session.coach_tasks)
+        await asyncio.sleep(0)
+        assert not session.coach_tasks
+
+    asyncio.run(scenario())
+    assert order == ["live start", "live end", "debrief start", "debrief end"]

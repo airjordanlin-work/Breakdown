@@ -51,3 +51,9 @@ def test_tips_ground_body_parts_when_no_joint_data():
     facts = {"move": "Six-step", "tips": ["Keep your hips low"]}
     assert ungrounded_claims("Hips low, keep stepping", facts) == []
     assert ungrounded_claims("Bend that knee", facts)
+
+
+def test_body_parts_match_whole_words_only():
+    facts = {"move": "BR 01", "tips": ["Warm up first", "Show some showmanship"]}
+    assert ungrounded_claims("Swing that arm", facts)    # "warm" is not "arm"
+    assert ungrounded_claims("Drop your hips", facts)    # "showmanship" is not "hip"
