@@ -11,6 +11,7 @@ import FramingGuide     from "../components/FramingGuide";
 import { INITIAL_FRAMING, nextFraming } from "../framing";
 import "../styles/session.css";
 import FreezeMeter      from "../components/FreezeMeter";
+import DemoOverlay      from "../components/DemoOverlay";
 
 const CAPTION_SIZE_KEY = "breakdown_caption_size";
 
@@ -51,6 +52,7 @@ export default function Session({ sessionId, onEnd }) {
     try { localStorage.setItem(CAPTION_SIZE_KEY, String(next)); } catch { /* private mode */ }
     return next;
   });
+  const [demo,        setDemo]        = useState(null);
 
   // Why there is no sound, when the backend knows. null means audio is fine so far.
   const [audioNote, setAudioNote] = useState(null);
@@ -77,6 +79,14 @@ export default function Session({ sessionId, onEnd }) {
     }
     if (msg.type === "coach_audio_skipped") {
       setAudioNote(`No audio for the last cue: ${msg.reason}`);
+      return;
+    }
+    if (msg.type === "demo") {
+      setDemo(msg);
+      return;
+    }
+    if (msg.type === "demo_unavailable") {
+      setCoachCue(msg.reason);
       return;
     }
     if (msg.type === "coach_cue") {
@@ -117,7 +127,9 @@ export default function Session({ sessionId, onEnd }) {
   }, [soundOn, unlockSound]);
 
   const onWsOpen  = useCallback(() => setWsReady(true), []);
-  const { sendFrame, canSend } = useWebSocket(sessionId, handleMessage, onWsOpen, playChunk);
+  const { sendFrame, canSend, sendJson } = useWebSocket(sessionId, handleMessage, onWsOpen, playChunk);
+  const requestDemo = useCallback(() => sendJson({ type: "demo_request" }), [sendJson]);
+  const closeDemo   = useCallback(() => setDemo(null), []);
 
   // Only send. The debug view now shows the live <video> element directly,
   // so we no longer re-render the whole page with a base64 image every frame.
@@ -183,6 +195,21 @@ export default function Session({ sessionId, onEnd }) {
             }}
           >
             TEXT {["S", "M", "L"][capSize]}
+          </button>
+
+          <button
+            className="sess-btn"
+            onClick={requestDemo}
+            disabled={!wsReady}
+            aria-label="Show me the move slowly"
+            style={{
+              background: "transparent", border: "1px solid #ffc14c",
+              color: "#ffc14c", padding: "4px 14px",
+              fontFamily: "'Anton',sans-serif",
+              fontSize: 10, letterSpacing: "0.15em", cursor: "pointer",
+            }}
+          >
+            SHOW ME
           </button>
 
           <button
@@ -307,6 +334,7 @@ export default function Session({ sessionId, onEnd }) {
 
           <FreezeMeter live={freezeLive} result={freezeDone} />
           {wsReady && !framing.ready && <FramingGuide problem={cameraError || framing.problem} />}
+          <DemoOverlay demo={demo} onClose={closeDemo} />
           <CoachCue cue={coachCue} size={CAPTION_SIZES[capSize]} />
         </div>
 

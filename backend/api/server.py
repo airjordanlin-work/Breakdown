@@ -30,6 +30,7 @@ from app.buffer import PoseBuffer, WINDOW_LEN
 from app.dtw_engine import DTWEngine
 from app.scorer import Scorer
 from app.coach import AICoach
+from app.demo import demo_message
 from app.voice import VoiceCoach
 from app.access import configured_token, require_token
 from app.audio_frames import encode_audio_chunk
@@ -162,8 +163,9 @@ def _score_payload(result) -> dict:
                 "joint":  r.joint_name.replace("_", " "),
                 "tier":   r.tier,
                 "diff":   round(r.diff, 1),
-                # which way to move: the joint angle is below or above target
-                "fix":    "straighten" if r.actual_angle < r.target_angle else "bend",
+                # which way to move: straighten/bend for joint angles,
+                # twist/reach for whole-rep features
+                "fix":    r.fix_direction,
                 "points": round(r.points_earned),
             }
             for r in result.results
@@ -179,6 +181,7 @@ class CoachingSession:
         self.closed         = False
         self.estimator      = PoseEstimator(model_complexity=1)
         self.buf            = PoseBuffer()
+        self.move_id        = config.move_id
         self.engine         = DTWEngine(REFERENCE_DIR, only_move=config.move_id)
         self.scorer         = Scorer(REFERENCE_DIR)
         self.ai_coach       = AICoach()
@@ -373,6 +376,24 @@ class CoachingSession:
                 },
             },
         }
+
+    def demo(self) -> Optional[tuple[dict, str, float]]:
+        """Demo of the practiced move, focused on the joint the scorer flags most.
+
+        None when there is no single move to show (no move picked and none
+        matched yet).
+        """
+        move_id = self.move_id or (self.dtw_result.move_name if self.dtw_result else None)
+        if not move_id or not (REFERENCE_DIR / f"{move_id}.npy").exists():
+            return None
+        meta = self._move_meta(move_id)
+        name = meta.get("display_name") or move_id.replace("_", " ").upper()
+        stats = self.scorer.stats()
+        try:
+            seconds = float(meta.get("duration_s", 3.0))
+        except (TypeError, ValueError):
+            seconds = 3.0
+        return demo_message(move_id, name, stats.focus_joint, stats.focus_fix, seconds)
 
     def _move_meta(self, move_name: Optional[str]) -> dict:
         move = self.engine.get_move(move_name) if move_name else None
@@ -598,6 +619,22 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                                     pass  # socket closed mid-send
 
                     _track(session, asyncio.create_task(_fire_cue()))
+
+            elif msg.get("type") == "demo_request":
+                # "Show me": play the move slowly, say what to watch, and keep
+                # live cues quiet while the dancer is watching.
+                demo = session.demo()
+                if demo is None:
+                    await websocket.send_text(json.dumps(
+                        {"type": "demo_unavailable", "reason": "Pick a move first"}))
+                    continue
+                demo_msg, line, quiet_s = demo
+                session.ai_coach.hold(quiet_s)
+                await websocket.send_text(json.dumps(demo_msg))
+                try:
+                    await send_coach_cue(websocket, session.voice, line, mode="demo")
+                except Exception:
+                    pass  # socket closed mid-send
 
             elif msg.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})

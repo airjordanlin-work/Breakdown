@@ -173,5 +173,9 @@
   "source_fps": 60.0,
   "clip_start_s": 5.317,
   "duration_s": 3.0,
-  "original_frames": 720
+  "original_frames": 720,
+  "features": [
+    "hip_turn",
+    "leg_reach"
+  ]
 }
