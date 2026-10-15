@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 
-export default function CoachCue({ cue }) {
+// Caption sizes in px. The coach's spoken words always show as text (NFR-17);
+// the dancer picks a size with the TEXT S/M/L button in the session bar.
+export const CAPTION_SIZES = [16, 22, 30];
+
+export default function CoachCue({ cue, size = CAPTION_SIZES[0] }) {
   const [visible, setVisible] = useState(false);
   const [displayed, setDisplayed] = useState("");
 
@@ -8,31 +12,16 @@ export default function CoachCue({ cue }) {
     if (!cue) return;
     setDisplayed(cue);
     setVisible(true);
-    const t = setTimeout(() => setVisible(false), 4000);
+    const t = setTimeout(() => setVisible(false), 5000);
     return () => clearTimeout(t);
   }, [cue]);
 
   if (!displayed) return null;
 
   return (
-    <div style={{
-      position:   "absolute",
-      bottom:     40,
-      left:       "50%",
-      transform:  "translateX(-50%)",
-      background: "rgba(6,6,8,0.90)",
-      border:     "1px solid rgba(255,45,45,0.4)",
-      padding:    "12px 28px",
-      fontFamily: "'Anton','Arial Black',sans-serif",
-      fontSize:   18,
-      letterSpacing: "0.06em",
-      color:      "#fff",
-      whiteSpace: "nowrap",
+    <div className="coach-cue" aria-live="polite" style={{
+      fontSize:   size,
       opacity:    visible ? 1 : 0,
-      transition: "opacity 0.5s ease",
-      pointerEvents: "none",
-      textShadow: "0 2px 12px rgba(255,45,45,0.4)",
-      boxShadow:  "0 0 30px rgba(255,45,45,0.15)",
     }}>
       {displayed.toUpperCase()}
     </div>

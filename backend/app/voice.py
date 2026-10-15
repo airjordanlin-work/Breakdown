@@ -53,6 +53,44 @@ NO_BODY_PHRASES = [
 ]
 
 
+MIN_KOKORO_VERSION = (0, 4, 4)   # first release that reads the v1.0 (.npz) voices file
+
+
+def _kokoro_version() -> str | None:
+    try:
+        from importlib.metadata import version
+        return version("kokoro-onnx")
+    except Exception:
+        return None
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    parts = []
+    for piece in v.split(".")[:3]:
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def describe_load_failure(exc: Exception) -> str:
+    """Actionable hint for a failed Kokoro load, including the installed version."""
+    ver = _kokoro_version()
+    shown = ver or "unknown"
+    if ver and _version_tuple(ver) < MIN_KOKORO_VERSION:
+        return (
+            f"Installed kokoro-onnx is {shown}, which is too old for voices-v1.0.bin "
+            "(it reads voices as JSON). Fix, from backend/ with the venv active: "
+            "pip install --no-deps -r requirements-tts.txt"
+        )
+    if isinstance(exc, UnicodeDecodeError):
+        return (
+            f"kokoro-onnx {shown} could not parse {VOICES_PATH.name}. Check it is the "
+            "v1.0 file (about 27 MB; `file` should say Zip archive) and that the "
+            "python running uvicorn is the venv one: python -c 'import kokoro_onnx, sys; print(sys.executable)'"
+        )
+    return f"kokoro-onnx {shown} failed to load {MODEL_PATH.name} / {VOICES_PATH.name}."
+
+
 class VoiceCoach:
     """Async voice coach using Kokoro TTS — runs fully local, no API required."""
 
@@ -89,10 +127,11 @@ class VoiceCoach:
 
         except ImportError:
             self.unavailable_reason = "kokoro-onnx is not installed"
-            print("VoiceCoach: kokoro-onnx not installed — run: pip install kokoro-onnx soundfile")
+            print("VoiceCoach: kokoro-onnx not installed — run: pip install --no-deps -r requirements-tts.txt soundfile")
         except Exception as e:
-            self.unavailable_reason = f"Kokoro failed to load: {e}"
+            self.unavailable_reason = f"Kokoro failed to load (kokoro-onnx {_kokoro_version() or 'unknown'}): {e}"
             print(f"VoiceCoach: failed to load — {e}")
+            print(f"  {describe_load_failure(e)}")
 
     def _pick(self, phrases: list[str]) -> str:
         """Pick a phrase not recently used to avoid repetition."""

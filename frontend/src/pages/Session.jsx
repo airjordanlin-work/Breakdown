@@ -6,8 +6,23 @@ import { apiFetch }           from "../api";
 import ScoreHUD         from "../components/ScoreHUD";
 import KeyframeFlash    from "../components/KeyframeFlash";
 import SkeletonCanvas   from "../components/SkeletonCanvas";
-import CoachCue         from "../components/CoachCue";
+import CoachCue, { CAPTION_SIZES } from "../components/CoachCue";
+import FramingGuide     from "../components/FramingGuide";
+import { INITIAL_FRAMING, nextFraming } from "../framing";
+import "../styles/session.css";
 import FreezeMeter      from "../components/FreezeMeter";
+
+const CAPTION_SIZE_KEY = "breakdown_caption_size";
+
+// Saved caption size index (0 small, 1 medium, 2 large), or small if unavailable.
+function loadCaptionSize() {
+  try {
+    const n = Number(localStorage.getItem(CAPTION_SIZE_KEY));
+    return Number.isInteger(n) && n >= 0 && n < CAPTION_SIZES.length ? n : 0;
+  } catch {
+    return 0;
+  }
+}
 
 export default function Session({ sessionId, onEnd }) {
   const [landmarks,   setLandmarks]   = useState([]);
@@ -28,6 +43,14 @@ export default function Session({ sessionId, onEnd }) {
   const [freezeLive,  setFreezeLive]  = useState(null);
   const [freezeDone,  setFreezeDone]  = useState(null);
   const [freezeDebug, setFreezeDebug] = useState(null);
+  const [framing,     setFraming]     = useState(INITIAL_FRAMING);
+  const [capSize,     setCapSize]     = useState(loadCaptionSize);
+
+  const cycleCaptionSize = () => setCapSize((i) => {
+    const next = (i + 1) % CAPTION_SIZES.length;
+    try { localStorage.setItem(CAPTION_SIZE_KEY, String(next)); } catch { /* private mode */ }
+    return next;
+  });
 
   // Why there is no sound, when the backend knows. null means audio is fine so far.
   const [audioNote, setAudioNote] = useState(null);
@@ -72,6 +95,7 @@ export default function Session({ sessionId, onEnd }) {
     if (msg.imu) setImu(msg.imu);
     if (msg.landmarks)                  setLandmarks(msg.landmarks);
     if (msg.visibility)                 setVisibility(msg.visibility);
+    setFraming((f) => nextFraming(f, msg.live_visibility));
     if (msg.ghost_bones)                setGhostBones(msg.ghost_bones);
     if (msg.ghost_anchor !== undefined) setGhostAnchor(msg.ghost_anchor);
     if (msg.aligned     !== undefined)  setAligned(msg.aligned);
@@ -101,7 +125,7 @@ export default function Session({ sessionId, onEnd }) {
 
   // fps is now a ceiling, not a fixed rate. Backpressure in canSend() means the
   // real rate automatically matches how fast the backend can keep up.
-  const { videoRef, canvasRef, startCapture, stopCapture } =
+  const { videoRef, canvasRef, startCapture, stopCapture, error: cameraError } =
     useCamera(handleFrame, { fps: 30, maxWidth: 480, canSend });
 
   stopCaptureRef.current = stopCapture;
@@ -116,24 +140,14 @@ export default function Session({ sessionId, onEnd }) {
     : null;
 
   return (
-    <div style={{
-      height: "100vh", background: "#060608",
-      fontFamily: "'Anton','Arial Black',sans-serif",
-      color: "#fff", display: "flex", flexDirection: "column",
-      overflow: "hidden",
-    }}>
+    <div className="sess-root">
       {/* ── top bar ── */}
-      <div style={{
-        borderBottom: "2px solid #1a1a1a",
-        padding: "12px 24px",
-        display: "flex", justifyContent: "space-between", alignItems: "center",
-        flexShrink: 0, background: "#060608",
-      }}>
-        <div style={{ fontSize: 14, letterSpacing: "0.15em", color: "#ff2d2d" }}>
+      <div className="sess-top">
+        <div className="sess-title">
           BREAKDANCE COACH
         </div>
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div className="sess-top-right">
           <div style={{
             fontSize: 11, letterSpacing: "0.2em",
             color:  aligned ? "#4cff4c" : displayName ? "#888" : "#444",
@@ -145,6 +159,7 @@ export default function Session({ sessionId, onEnd }) {
 
           {!soundOn && (
             <button
+              className="sess-btn"
               onClick={() => unlockSound().catch(() => {})}
               style={{
                 background: "#1a0606", border: "1px solid #ff2d2d",
@@ -158,6 +173,20 @@ export default function Session({ sessionId, onEnd }) {
           )}
 
           <button
+            className="sess-btn"
+            aria-label="Caption text size"
+            onClick={cycleCaptionSize}
+            style={{
+              background: "transparent", border: "1px solid #2a2a2a", color: "#888",
+              padding: "4px 14px", fontFamily: "'Anton',sans-serif",
+              fontSize: 10, letterSpacing: "0.15em", cursor: "pointer",
+            }}
+          >
+            TEXT {["S", "M", "L"][capSize]}
+          </button>
+
+          <button
+            className="sess-btn"
             onClick={() => setDebugMode((d) => !d)}
             style={{
               background:    debugMode ? "#1a1200" : "transparent",
@@ -172,6 +201,7 @@ export default function Session({ sessionId, onEnd }) {
           </button>
 
           <button
+            className="sess-btn"
             onClick={handleEnd}
             style={{
               background: "transparent", border: "1px solid #2a2a2a",
@@ -198,7 +228,7 @@ export default function Session({ sessionId, onEnd }) {
       )}
 
       {/* ── guidance banner ── */}
-      {guidance && !aligned && (
+      {framing.ready && guidance && !aligned && (
         <div style={{
           background: "rgba(255,45,45,0.07)",
           borderBottom: "1px solid rgba(255,45,45,0.15)",
@@ -211,10 +241,10 @@ export default function Session({ sessionId, onEnd }) {
       )}
 
       {/* ── main ── */}
-      <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
+      <div className="sess-main">
 
         {/* view */}
-        <div style={{ flex: 1, position: "relative", overflow: "hidden", background: "#060608" }}>
+        <div className="sess-view">
           {/* Live camera feed. Always mounted so the stream stays attached; only visible
               in debug mode. Mirrored to match the backend's cv2.flip. */}
           <video ref={videoRef} autoPlay playsInline muted
@@ -236,7 +266,7 @@ export default function Session({ sessionId, onEnd }) {
               </div>
             </div>
           ) : debugMode ? (
-            <div style={{ position:"absolute", top:12, left:12, zIndex:2,
+            <div className="sess-debug" style={{ position:"absolute", top:12, left:12, zIndex:2,
               fontSize:10, letterSpacing:"0.2em", color:"#ff2d2d" }}>
               <div>ROUND TRIP {latencyMs ?? "--"} MS</div>
               <div>
@@ -268,17 +298,20 @@ export default function Session({ sessionId, onEnd }) {
             <KeyframeFlash result={scoreResult} onDone={() => setScoreResult(null)} />
           )}
 
+          {stats && (
+            <div className="sess-chip" aria-label="Score">
+              <span>{stats.clean_reps ?? 0}/{stats.reps ?? 0} clean</span>
+              <span>{stats.clean_streak ?? 0}×</span>
+            </div>
+          )}
+
           <FreezeMeter live={freezeLive} result={freezeDone} />
-          <CoachCue cue={coachCue} />
+          {wsReady && !framing.ready && <FramingGuide problem={cameraError || framing.problem} />}
+          <CoachCue cue={coachCue} size={CAPTION_SIZES[capSize]} />
         </div>
 
         {/* ── sidebar ── */}
-        <div style={{
-          width: 210, background: "#07070c",
-          borderLeft: "1px solid #111", padding: "20px 16px",
-          display: "flex", flexDirection: "column", overflowY: "auto",
-          flexShrink: 0,
-        }}>
+        <div className="sess-side">
           {stats
             ? <ScoreHUD stats={stats} />
             : <div style={{ fontSize:9, letterSpacing:"0.2em", color:"#2a2a2a" }}>

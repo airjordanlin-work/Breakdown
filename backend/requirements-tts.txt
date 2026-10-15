@@ -1,0 +1,12 @@
+# Kokoro TTS. Install AFTER requirements.txt, with --no-deps:
+#
+#   python -m pip install --no-deps -r requirements-tts.txt
+#
+# Why a separate file: every kokoro-onnx release that reads the v1.0 voices
+# file (voices-v1.0.bin, a numpy .npz archive) declares numpy>=2.0.2, but
+# mediapipe 0.10.21 (the last build with an Intel Mac wheel) needs numpy<2.
+# kokoro-onnx 0.4.7 loads fine on numpy 1.26.4, and its other dependencies
+# (onnxruntime, espeakng-loader, phonemizer-fork, colorlog) are already pinned
+# in requirements.txt. Do not use kokoro-onnx 0.3.x: it reads voices as JSON
+# and fails on voices-v1.0.bin with a UnicodeDecodeError.
+kokoro-onnx==0.4.7

@@ -166,10 +166,11 @@ Create a `.env` file in the repo root:
 ANTHROPIC_API_KEY=your_key_here
 ```
 
-For spoken cues, download the Kokoro model files into `backend/`:
+For spoken cues, install Kokoro (it needs `--no-deps` because of a numpy pin conflict, explained in `backend/requirements-tts.txt`) and download the model files into `backend/`:
 
 ```bash
 cd backend
+python -m pip install --no-deps -r requirements-tts.txt
 curl -L -o kokoro-v1.0.onnx https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
 curl -L -o voices-v1.0.bin https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
 ```
