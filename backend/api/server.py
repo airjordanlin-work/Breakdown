@@ -37,6 +37,7 @@ from app.imu_protocol import PacketError, unpack_forwarded
 from app.imu_store import ImuStore
 from app.freeze_monitor import FreezeMonitor
 from app.activity import is_moving
+from app.attempts import AttemptTracker
 from app.move_catalog import load_catalog, preview as move_preview
 
 # Every route needs the shared ACCESS_TOKEN when one is set.
@@ -146,6 +147,30 @@ class SessionClosed(Exception):
     """The session was ended (DELETE /session) while its socket was still sending frames."""
 
 
+def _track(session: "CoachingSession", task: asyncio.Task) -> None:
+    session.coach_tasks.add(task)
+    task.add_done_callback(session.coach_tasks.discard)
+
+
+def _score_payload(result) -> dict:
+    """One scored rep as the client (and the coach) see it."""
+    return {
+        "points":  round(result.points_this_attempt),
+        "clean":   all(r.tier != "Miss" for r in result.results),
+        "results": [
+            {
+                "joint":  r.joint_name.replace("_", " "),
+                "tier":   r.tier,
+                "diff":   round(r.diff, 1),
+                # which way to move: the joint angle is below or above target
+                "fix":    "straighten" if r.actual_angle < r.target_angle else "bend",
+                "points": round(r.points_earned),
+            }
+            for r in result.results
+        ],
+    }
+
+
 class CoachingSession:
     def __init__(self, config: SessionConfig) -> None:
         # close() and frame processing run on different threads; this lock keeps
@@ -170,6 +195,14 @@ class CoachingSession:
         self.lost_frames    = 0
         self.frames_since_rep = 0
         self.future_window: list = []
+        self.attempts       = AttemptTracker()
+        # One coach line at a time: a debrief waits for a live cue still in
+        # flight instead of talking over it. Tasks are kept so they can't be
+        # garbage-collected mid-flight.
+        self.speak_lock     = asyncio.Lock()
+        self.coach_tasks: set[asyncio.Task] = set()
+        self.previous_rep: Optional[dict] = None   # payload of the rep before the latest one
+        self.latest_rep: Optional[dict] = None
 
         dummy = np.zeros((480, 640, 3), dtype=np.uint8)
         self.estimator.process(dummy)
@@ -240,6 +273,12 @@ class CoachingSession:
                     self.score_result  = s
                     self.flash_counter = KEYFRAME_FLASH
                     self.frames_since_rep = 0
+                    rep_payload = _score_payload(s)
+                    self.previous_rep, self.latest_rep = self.latest_rep, rep_payload
+                    self.attempts.add_rep(rep_payload)
+
+        # The dancer stopped after scored reps: hand the attempt to the debrief.
+        finished_attempt = self.attempts.on_frame(moving, captured_at)
 
         if self.flash_counter > 0:
             self.flash_counter -= 1
@@ -275,21 +314,7 @@ class CoachingSession:
 
         score_payload = None
         if self.score_result and self.flash_counter > 0:
-            score_payload = {
-                "points":  round(self.score_result.points_this_attempt),
-                "clean":   all(r.tier != "Miss" for r in self.score_result.results),
-                "results": [
-                    {
-                        "joint":  r.joint_name.replace("_", " "),
-                        "tier":   r.tier,
-                        "diff":   round(r.diff, 1),
-                        # which way to move: the joint angle is below or above target
-                        "fix":    "straighten" if r.actual_angle < r.target_angle else "bend",
-                        "points": round(r.points_earned),
-                    }
-                    for r in self.score_result.results
-                ],
-            }
+            score_payload = _score_payload(self.score_result)
 
         ref_meta = self._move_meta(move_name)
 
@@ -337,7 +362,15 @@ class CoachingSession:
                 "moving":       moving,
                 "fill_ratio":   round(fill_ratio, 3),
                 "score_result": score_payload,
+                "previous_result": self.previous_rep if score_payload else None,
+                "clean_streak": stats.clean_streak,
                 "freeze":       freeze["result"],
+                "debrief_reps": finished_attempt,
+                "session_totals": {
+                    "reps":        stats.reps,
+                    "clean_reps":  stats.clean_reps,
+                    "best_streak": stats.best_streak,
+                },
             },
         }
 
@@ -396,6 +429,7 @@ async def send_coach_cue(
     voice: Optional[VoiceCoach],
     cue: str,
     timeout: float = TTS_TIMEOUT_SECONDS,
+    mode: str = "live",
 ) -> bool:
     """Send a coach cue to the client: caption text first, then the spoken audio.
 
@@ -404,7 +438,7 @@ async def send_coach_cue(
     the client can show it. Returns True if audio was sent.
     """
     turn_id = uuid.uuid4().hex[:12]
-    await websocket.send_text(json.dumps({"type": "coach_cue", "cue": cue, "turn_id": turn_id}))
+    await websocket.send_text(json.dumps({"type": "coach_cue", "cue": cue, "turn_id": turn_id, "mode": mode}))
 
     status = voice_status(voice)
     if not status["available"]:
@@ -520,6 +554,23 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                 # A finished freeze gets feedback right away (skips the cooldown);
                 # everything else waits for the normal cooldown.
                 coach = session.ai_coach
+                debrief_reps = coach_ctx.get("debrief_reps")
+                if debrief_reps:
+                    # The dancer just stopped: one debrief for that attempt.
+                    async def _fire_debrief(ctx=coach_ctx, reps=debrief_reps):
+                        async with session.speak_lock:
+                            text = await session.ai_coach.get_debrief(
+                                ctx.get("move_name", ""), reps, ctx.get("session_totals"),
+                            )
+                            if text:
+                                try:
+                                    await send_coach_cue(websocket, session.voice, text, mode="debrief")
+                                except Exception as e:
+                                    print(f"Debrief not sent (socket closed?): {e}")
+
+                    _track(session, asyncio.create_task(_fire_debrief()))
+                    continue
+
                 freeze_result = coach_ctx.get("freeze")
                 # Nothing is said while no body is tracked or the dancer is still.
                 fire = coach.can_fire_now() if freeze_result else coach.should_fire(
@@ -530,20 +581,23 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                 )
                 if fire:
                     async def _fire_cue(ctx=coach_ctx):
-                        cue = await session.ai_coach.get_cue(
-                            move_name    = ctx.get("move_name", ""),
-                            score_result = ctx.get("score_result"),
-                            freeze       = ctx.get("freeze"),
-                            move_tips    = ctx.get("move_tips"),
-                        )
-                        if cue:
-                            # caption + Kokoro audio, streamed to the client
-                            try:
-                                await send_coach_cue(websocket, session.voice, cue)
-                            except Exception:
-                                pass  # socket closed mid-send
+                        async with session.speak_lock:
+                            cue = await session.ai_coach.get_cue(
+                                move_name    = ctx.get("move_name", ""),
+                                score_result = ctx.get("score_result"),
+                                freeze       = ctx.get("freeze"),
+                                move_tips    = ctx.get("move_tips"),
+                                previous_result = ctx.get("previous_result"),
+                                clean_streak = ctx.get("clean_streak", 0),
+                            )
+                            if cue:
+                                # caption + Kokoro audio, streamed to the client
+                                try:
+                                    await send_coach_cue(websocket, session.voice, cue)
+                                except Exception:
+                                    pass  # socket closed mid-send
 
-                    asyncio.create_task(_fire_cue())
+                    _track(session, asyncio.create_task(_fire_cue()))
 
             elif msg.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
