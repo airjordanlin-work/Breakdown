@@ -4,7 +4,7 @@ export default function KeyframeFlash({ result, onDone }) {
   useEffect(() => { const t = setTimeout(onDone, 2500); return () => clearTimeout(t); }, [result, onDone]);
   if (!result) return null;
   return (
-    <div style={{ position:"absolute", top:20, right:20, background:"rgba(6,6,8,0.92)",
+    <div className="keyframe-flash" style={{ position:"absolute", top:20, right:20, background:"rgba(6,6,8,0.92)",
       border:"1px solid #222", padding:"16px 20px", minWidth:200 }}>
       <div style={{ fontSize:9, letterSpacing:"0.2em", color:"#555", marginBottom:8 }}>KEYFRAME</div>
       <div style={{ fontSize:28, marginBottom:12 }}>+{result.points} PTS</div>

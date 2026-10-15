@@ -39,7 +39,7 @@ export default function FreezeMeter({ live, result }) {
   const wobbly = data.tier === "shaky" || data.tier === "unstable";
 
   return (
-    <div style={{
+    <div className="freeze-meter" style={{
       position: "absolute", top: 20, left: "50%", transform: "translateX(-50%)",
       background: "rgba(6,6,8,0.92)", border: `1px solid ${color}55`,
       padding: "12px 20px", minWidth: 220, textAlign: "center",
