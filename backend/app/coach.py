@@ -1,18 +1,19 @@
 """
 Real-time AI coaching module.
 
-Uses Claude Haiku to generate natural, context-aware coaching cues
-based on live pose data. A cooldown gate ensures it only fires every
-4-6 seconds so it never feels spammy.
+Uses Claude Haiku to generate short, natural coaching cues from live pose
+data. The coach only speaks while a pose is tracked and the dancer is
+moving, and a cooldown keeps it from feeling spammy. When the API is
+missing or fails, a templated cue built from the same facts is used.
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
+import random
 import time
-from pathlib import Path
-from typing import Optional
+from collections import deque
+from typing import Optional, Sequence
 
 import httpx
 from dotenv import load_dotenv
@@ -22,36 +23,55 @@ load_dotenv()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ANTHROPIC_URL     = "https://api.anthropic.com/v1/messages"
 MODEL             = "claude-haiku-4-5-20251001"
-MAX_TOKENS        = 60       # short cues only
-COOLDOWN_SECONDS  = 5.0   # when aligned
-COOLDOWN_NO_BODY  = 12.0  # when not in frame — less frequent
+MAX_TOKENS        = 40       # short cues only
+MAX_CUE_WORDS     = 8        # longer replies are dropped for a templated cue
+COOLDOWN_SECONDS  = 5.0      # between cues that carry a joint correction or praise
+COOLDOWN_ENCOURAGE = 15.0    # moving, but no joint data yet: speak less
+RECENT_CUES       = 4        # never repeat one of the last few cues
 TIMEOUT_SECONDS   = 4.0      # max wait for API response
 
 
-SYSTEM_PROMPT = """You are an experienced bboy (breakdancer) coach giving real-time feedback.
-You speak like a real street dance coach — direct, encouraging, authentic.
+SYSTEM_PROMPT = """You are a friendly breaking coach talking to a dancer while they practice.
+Talk like a real person standing next to them: warm, short, plain words.
 Rules:
-- ONE short phrase only, maximum 10 words
-- Never say "I" or "you should"  
-- Sound like a bboy coach, not a fitness instructor
-- Use breakdance vocabulary: freeze, lock, pop, flow, toprock, footwork, stance
-- If correcting a joint, name it specifically: "left elbow", "right arm"
-- Never give generic gym/fitness advice like "feet shoulder-width apart"
-Good examples:
-"Lock that left arm out"
-"Stay low, keep the energy"
-"Right elbow needs to open up"
-"Nice freeze, hold it"
-"Find the rhythm, stay loose"
-"That's it, keep flowing"
-Bad examples (never say these):
-"Feet shoulder-width apart"
-"Chest up, weight forward"
-"Engage your core"
+- ONE short phrase, at most 6 words. No quotes, no emoji.
+- Only name a body part if the message names it, and use the exact side given.
+- Never say numbers, angles, degrees or scores.
+- No gym talk ("engage your core") and no forced slang.
+Good: "Straighten that left elbow", "Yes, that's it", "Keep it flowing"
 """
 
 # Wearable sensor names -> how a coach would say it
 _LIMB_WORDS = {"wrist": "base arm", "leg": "legs"}
+
+# Templated cues: used when the API key is missing, the call fails or times
+# out, or the model repeats itself. Same facts as the prompt, nothing more.
+_FIX_TEMPLATES = {
+    "straighten": ["Straighten your {joint}", "Open up that {joint}", "Reach through your {joint}"],
+    "bend":       ["Bend your {joint} more", "Bring your {joint} in", "Soften that {joint}"],
+}
+_CLOSE_TEMPLATES = ["Almost, {fix} your {joint}", "Close, {fix} that {joint}", "Nearly, {fix} your {joint}"]
+_PERFECT_TEMPLATES = ["Yes, that's it", "Clean, keep going", "Just like that", "That's the one"]
+_ENCOURAGE_TEMPLATES = ["Keep it moving", "Nice, stay with it", "Good, keep flowing", "Stay loose"]
+_FREEZE_CLEAN_TEMPLATES = ["Solid hold", "Nice freeze", "Locked in, nice"]
+_FREEZE_SHAKY_TEMPLATES = ["Steady your {limb}", "Lock your {limb} in", "Settle your {limb}"]
+
+
+def correction_focus(score_result: Optional[dict]) -> Optional[dict]:
+    """The one joint result a cue should be about: worst Miss, else worst Close.
+
+    Returns {"tier": "Miss" | "Close" | "Perfect", "joint", "fix"}, or None when
+    there is no joint data. "Perfect" means every checked joint matched.
+    """
+    results = (score_result or {}).get("results") or []
+    if not results:
+        return None
+    for tier in ("Miss", "Close"):
+        hits = [r for r in results if r.get("tier") == tier]
+        if hits:
+            r = max(hits, key=lambda r: abs(r.get("diff", 0)))
+            return {"tier": tier, "joint": r["joint"], "fix": r.get("fix") or "straighten"}
+    return {"tier": "Perfect", "joint": None, "fix": None}
 
 
 def _build_freeze_prompt(freeze: dict, last_cue: Optional[str]) -> str:
@@ -83,114 +103,148 @@ def _build_freeze_prompt(freeze: dict, last_cue: Optional[str]) -> str:
 
 def _build_prompt(
     move_name: str,
-    aligned: bool,
-    fill_ratio: float,
     score_result: Optional[dict],
-    last_cue: Optional[str],
+    recent_cues: Sequence[str] = (),
+    move_tips: Sequence[str] = (),
 ) -> str:
-    lines = [f'The user is practicing breakdancing, working on move: "{move_name or "br_01"}"']
+    """Prompt for a live cue while the dancer is moving through a move.
 
-    if fill_ratio < 1.0:
-        lines.append("The camera is still detecting the user's position.")
-        lines.append("Give a very short breakdance-specific cue to help them get ready.")
-        lines.append("Examples: 'Get low, spread your weight', 'Arms out, stay loose', 'Find your stance'")
-        if last_cue:
-            lines.append(f'Do NOT repeat: "{last_cue}"')
-        lines.append("ONE phrase, max 8 words, sound like a bboy coach not a fitness instructor.")
-        return "\n".join(lines)
-
-    if not aligned:
-        lines.append("The user is attempting the move but not yet aligned with the reference.")
-        lines.append("Give an encouraging breakdance-specific cue.")
-        lines.append("Examples: 'Keep moving, find the rhythm', 'Stay low', 'Lock it in'")
-        if last_cue:
-            lines.append(f'Do NOT repeat: "{last_cue}"')
-        lines.append("ONE phrase, max 8 words.")
-        return "\n".join(lines)
-
-    lines.append("The user is aligned with the reference move.")
-
-    if score_result and score_result.get("results"):
-        results  = score_result["results"]
-        misses   = [r for r in results if r["tier"] == "Miss"]
-        closes   = [r for r in results if r["tier"] == "Close"]
-        perfects = [r for r in results if r["tier"] == "Perfect"]
-
-        if misses:
-            r = misses[0]
-            joint     = r["joint"]
-            diff      = r["diff"]
-            direction = "extend" if diff > 0 else "bend"
-            lines.append(f"Joint issue: {joint} is {diff:.0f} degrees off — needs to {direction}")
-            lines.append("Give a specific joint correction cue.")
-        elif closes:
-            r = closes[0]
-            lines.append(f"Almost there: {r['joint']} is {r['diff']:.0f} degrees off")
-            lines.append("Give an encouraging refinement cue.")
-        elif perfects:
-            lines.append("All joints perfect.")
-            lines.append("Give a short hype/encouragement cue.")
+    Only called when a pose is tracked and the dancer is moving. The joint and
+    the direction come from the scorer; nothing else about the body is given.
+    """
+    lines = [f'The dancer is practicing the move "{move_name or "this move"}" right now.']
+    focus = correction_focus(score_result)
+    if focus is None:
+        lines.append("No joint measurements yet. Give short encouragement to keep going.")
+        if move_tips:
+            tips = "; ".join(move_tips)
+            lines.append(f"Written tips for this move (you may use one): {tips}")
+        else:
+            lines.append("Do not name any body part.")
+    elif focus["tier"] == "Miss":
+        lines.append(f"Measured: their {focus['joint']} needs to {focus['fix']}.")
+        lines.append(f"Give one clear correction about the {focus['joint']}.")
+    elif focus["tier"] == "Close":
+        lines.append(f"Measured: their {focus['joint']} is close, it needs to {focus['fix']} a little.")
+        lines.append(f"Give one small, encouraging refinement about the {focus['joint']}.")
     else:
-        lines.append("No keyframe data yet.")
-        lines.append("Give a general encouragement cue.")
-
-    if last_cue:
-        lines.append(f'Do NOT repeat: "{last_cue}"')
-
-    lines.append("ONE phrase, max 10 words, sound like a real bboy coach.")
+        lines.append("Measured: every checked joint matched the reference.")
+        lines.append("Give short praise. Do not name any body part.")
+    if recent_cues:
+        quoted = ", ".join(f'"{c}"' for c in recent_cues)
+        lines.append(f"Do NOT repeat or closely reword any of: {quoted}")
+    lines.append("ONE phrase, max 6 words.")
     return "\n".join(lines)
 
 
+def _pick(options: Sequence[str], recent: Sequence[str]) -> str:
+    fresh = [o for o in options if o not in recent]
+    if not fresh and recent:
+        # every option was used lately: at least never say the last one again
+        fresh = [o for o in options if o != recent[-1]]
+    return random.choice(fresh or list(options))
+
+
+def fallback_cue(
+    score_result: Optional[dict],
+    recent_cues: Sequence[str] = (),
+    freeze: Optional[dict] = None,
+) -> str:
+    """Templated cue built from the same facts the prompt would get."""
+    if freeze:
+        if freeze.get("tier") in ("rock solid", "steady"):
+            return _pick(_FREEZE_CLEAN_TEMPLATES, recent_cues)
+        limb = _LIMB_WORDS.get(freeze.get("shakiest") or "", "body")
+        return _pick(_FREEZE_SHAKY_TEMPLATES, recent_cues).format(limb=limb)
+
+    focus = correction_focus(score_result)
+    if focus is None:
+        return _pick(_ENCOURAGE_TEMPLATES, recent_cues)
+    if focus["tier"] == "Perfect":
+        return _pick(_PERFECT_TEMPLATES, recent_cues)
+    if focus["tier"] == "Miss":
+        options = [t.format(joint=focus["joint"]) for t in _FIX_TEMPLATES[focus["fix"]]]
+    else:
+        options = [t.format(joint=focus["joint"], fix=focus["fix"]) for t in _CLOSE_TEMPLATES]
+    return _pick(options, recent_cues)
+
+
 class AICoach:
-    """Generates real-time coaching cues using Claude Haiku."""
+    """Generates real-time coaching cues using Claude Haiku, with templated fallback."""
 
     def __init__(self) -> None:
         self._last_called: float  = 0.0
         self._last_cue: Optional[str] = None
+        self._recent: deque[str]  = deque(maxlen=RECENT_CUES)
         self._pending: bool       = False
         self._available: bool     = bool(ANTHROPIC_API_KEY)
 
         if not self._available:
-            print("AICoach: ANTHROPIC_API_KEY not set — AI coaching disabled")
+            print("AICoach: ANTHROPIC_API_KEY not set — using templated cues")
             print("  Add ANTHROPIC_API_KEY=sk-ant-... to your .env file")
         else:
             print(f"AICoach: ready — model={MODEL} cooldown={COOLDOWN_SECONDS}s")
 
     def can_fire_now(self) -> bool:
         """For event-driven cues (like a finished freeze) that skip the cooldown."""
-        return self._available and not self._pending
+        return not self._pending
 
-    def should_fire(self, aligned: bool = False, fill_ratio: float = 0) -> bool:
-        if not self._available or self._pending:
+    def should_fire(
+        self,
+        *,
+        tracked: bool,
+        moving: bool,
+        fill_ratio: float,
+        has_score: bool = False,
+    ) -> bool:
+        """Speak only while a pose is tracked this frame and the dancer is moving.
+
+        No body in frame, a half-full buffer, or standing still all mean
+        silence; the on-screen guide handles framing.
+        """
+        if self._pending or not (tracked and moving and fill_ratio >= 1.0):
             return False
-        cooldown = COOLDOWN_SECONDS if (aligned and fill_ratio >= 1.0) else COOLDOWN_NO_BODY
+        cooldown = COOLDOWN_SECONDS if has_score else COOLDOWN_ENCOURAGE
         return time.time() - self._last_called >= cooldown
+
+    def _remember(self, cue: str) -> str:
+        self._last_cue = cue
+        self._recent.append(cue)
+        return cue
 
     async def get_cue(
         self,
         move_name: str,
-        aligned: bool,
-        fill_ratio: float,
         score_result: Optional[dict],
         freeze: Optional[dict] = None,
+        move_tips: Optional[Sequence[str]] = None,
     ) -> Optional[str]:
-        """Call Claude Haiku and return a coaching cue string, or None on failure."""
-        if not self._available:
-            return None
-
-        self._pending    = True
+        """Return a short coaching cue: from Claude Haiku, or templated if that fails."""
+        self._pending     = True
         self._last_called = time.time()
+        recent = list(self._recent)
+        try:
+            cue = await self._ask_model(move_name, score_result, freeze, recent, move_tips or ()) if self._available else None
+            if not cue or cue.lower() in (c.lower() for c in recent):
+                cue = fallback_cue(score_result, recent, freeze)
+            print(f"AICoach: '{cue}'")
+            return self._remember(cue)
+        finally:
+            self._pending = False
 
+    async def _ask_model(
+        self,
+        move_name: str,
+        score_result: Optional[dict],
+        freeze: Optional[dict],
+        recent: list[str],
+        move_tips: Sequence[str],
+    ) -> Optional[str]:
+        """One Haiku call. None on timeout, error, or a reply that is too long."""
         if freeze:
             prompt = _build_freeze_prompt(freeze, self._last_cue)
         else:
-            prompt = _build_prompt(
-                move_name   = move_name,
-                aligned     = aligned,
-                fill_ratio  = fill_ratio,
-                score_result= score_result,
-                last_cue    = self._last_cue,
-            )
+            prompt = _build_prompt(move_name, score_result, recent, move_tips)
 
         try:
             async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
@@ -210,21 +264,15 @@ class AICoach:
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                cue  = data["content"][0]["text"].strip().strip('"')
-
-                # sanity check — ignore if too long or empty
-                if not cue or len(cue.split()) > 14:
-                    return None
-
-                self._last_cue = cue
-                print(f"AICoach: '{cue}'")
-                return cue
-
+                cue  = data["content"][0]["text"].strip().strip('"').rstrip(".")
         except httpx.TimeoutException:
-            print("AICoach: timeout — skipping this cue")
+            print("AICoach: timeout — using a templated cue")
             return None
         except Exception as e:
-            print(f"AICoach: error — {e}")
+            print(f"AICoach: error — {e}; using a templated cue")
             return None
-        finally:
-            self._pending = False
+
+        limit = 10 if freeze else MAX_CUE_WORDS
+        if not cue or len(cue.split()) > limit:
+            return None
+        return cue
