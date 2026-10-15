@@ -60,5 +60,12 @@ export function useWebSocket(sessionId, onMessage, onOpen, onBinary) {
     return true;
   }, [canSend]);
 
-  return { sendFrame, canSend };
+  // Control messages (like a demo request) skip the frame backpressure.
+  const sendJson = useCallback((msg) => {
+    if (ws.current?.readyState !== WebSocket.OPEN) return false;
+    ws.current.send(JSON.stringify(msg));
+    return true;
+  }, []);
+
+  return { sendFrame, canSend, sendJson };
 }
