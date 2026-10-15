@@ -1,0 +1,7 @@
+
+[threshold] 10 moves, window=60, noise=0.05, speeds=[0.8, 1.0, 1.25]
+current dtw_threshold values: [2000.0]
+ same_move_warped: n=30  min=18  p50=53  max=119
+       other_move: n=90  min=90  p50=535  max=1432
+       held_still: n=20  min=133  p50=287  max=687
+  raw samples -> ../docs/benchmarks/bench_threshold_20261013_071355.csv

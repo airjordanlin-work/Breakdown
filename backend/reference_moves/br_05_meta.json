@@ -5,7 +5,7 @@
   "original_file": "gBR_sBM_cAll_d04_mBR1_ch01.pkl",
   "keyframes": [
     {
-      "frame": 59,
+      "frame": 14,
       "joints": [
         {
           "joint_name": "left_elbow",
@@ -14,7 +14,6 @@
             13,
             15
           ],
-          "target_angle": 160.0,
           "threshold": 30.0
         },
         {
@@ -24,7 +23,147 @@
             14,
             16
           ],
-          "target_angle": 160.0,
+          "threshold": 30.0
+        },
+        {
+          "joint_name": "left_knee",
+          "joint_triplet": [
+            23,
+            25,
+            27
+          ],
+          "threshold": 30.0
+        },
+        {
+          "joint_name": "right_knee",
+          "joint_triplet": [
+            24,
+            26,
+            28
+          ],
+          "threshold": 30.0
+        }
+      ]
+    },
+    {
+      "frame": 29,
+      "joints": [
+        {
+          "joint_name": "left_elbow",
+          "joint_triplet": [
+            11,
+            13,
+            15
+          ],
+          "threshold": 30.0
+        },
+        {
+          "joint_name": "right_elbow",
+          "joint_triplet": [
+            12,
+            14,
+            16
+          ],
+          "threshold": 30.0
+        },
+        {
+          "joint_name": "left_knee",
+          "joint_triplet": [
+            23,
+            25,
+            27
+          ],
+          "threshold": 30.0
+        },
+        {
+          "joint_name": "right_knee",
+          "joint_triplet": [
+            24,
+            26,
+            28
+          ],
+          "threshold": 30.0
+        }
+      ]
+    },
+    {
+      "frame": 44,
+      "joints": [
+        {
+          "joint_name": "left_elbow",
+          "joint_triplet": [
+            11,
+            13,
+            15
+          ],
+          "threshold": 30.0
+        },
+        {
+          "joint_name": "right_elbow",
+          "joint_triplet": [
+            12,
+            14,
+            16
+          ],
+          "threshold": 30.0
+        },
+        {
+          "joint_name": "left_knee",
+          "joint_triplet": [
+            23,
+            25,
+            27
+          ],
+          "threshold": 30.0
+        },
+        {
+          "joint_name": "right_knee",
+          "joint_triplet": [
+            24,
+            26,
+            28
+          ],
+          "threshold": 30.0
+        }
+      ]
+    },
+    {
+      "frame": 59,
+      "joints": [
+        {
+          "joint_name": "left_elbow",
+          "joint_triplet": [
+            11,
+            13,
+            15
+          ],
+          "threshold": 30.0
+        },
+        {
+          "joint_name": "right_elbow",
+          "joint_triplet": [
+            12,
+            14,
+            16
+          ],
+          "threshold": 30.0
+        },
+        {
+          "joint_name": "left_knee",
+          "joint_triplet": [
+            23,
+            25,
+            27
+          ],
+          "threshold": 30.0
+        },
+        {
+          "joint_name": "right_knee",
+          "joint_triplet": [
+            24,
+            26,
+            28
+          ],
           "threshold": 30.0
         }
       ]

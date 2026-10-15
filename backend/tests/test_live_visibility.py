@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 
+from app.attempts import AttemptTracker
 from api.server import CoachingSession, REFERENCE_DIR, _live_visibility
 from app.buffer import PoseBuffer
 from app.freeze_monitor import FreezeMonitor
@@ -51,6 +52,12 @@ def make_session(poses) -> CoachingSession:
     s.pose_frame = None
     s.frame_idx = 0
     s.last_captured_at = None
+    s.lost_frames = 0
+    s.frames_since_rep = 0
+    s.future_window = []
+    s.attempts = AttemptTracker()
+    s.previous_rep = None
+    s.latest_rep = None
     return s
 
 

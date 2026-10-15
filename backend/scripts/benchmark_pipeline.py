@@ -8,6 +8,7 @@ backend/recordings/ so the numbers can be re-derived.
     python scripts/benchmark_pipeline.py pose --video clip.mp4
     python scripts/benchmark_pipeline.py pose --video clip.mp4 --with-dtw
     python scripts/benchmark_pipeline.py coach --n 5
+    python scripts/benchmark_pipeline.py threshold --out-dir ../docs/benchmarks
     python scripts/benchmark_pipeline.py all --video clip.mp4
 
 What each stage measures (and what it does not):
@@ -20,6 +21,12 @@ What each stage measures (and what it does not):
          does it (every 3rd frame). Excludes browser capture, JPEG decode and
          the WebSocket hop. For true end-to-end latency, use the round-trip
          readout in the frontend debug mode.
+  threshold
+         DTW distance of each reference move against: its own clip played
+         faster and slower with noise added (a stand-in for doing the move),
+         the other moves, and a single frame held still. Shows whether the
+         per-move dtw_threshold separates them. It uses reference data only,
+         so it cannot say how far a real dancer on a phone camera lands.
   coach  Claude Haiku latency, token use and cost per cue across fixed
          scenarios, plus an automatic grounding check. The check is a rough
          heuristic. Fill in the manual_label column in the CSV by hand and
@@ -71,9 +78,9 @@ def summarize(label: str, values_ms: list[float]) -> str:
     return line
 
 
-def write_csv(stage: str, header: list[str], rows: list[list]) -> Path:
-    OUT_DIR.mkdir(exist_ok=True)
-    path = OUT_DIR / f"bench_{stage}_{_STAMP}.csv"
+def write_csv(stage: str, header: list[str], rows: list[list], out_dir: Path = OUT_DIR) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"bench_{stage}_{_STAMP}.csv"
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(header)
@@ -120,6 +127,50 @@ def bench_dtw(args: argparse.Namespace) -> None:
     print(f"self-match sanity (noisy slice of a reference finds itself): "
           f"{self_hits}/{args.n} = {100.0 * self_hits / args.n:.1f}%  (plumbing check, not accuracy)")
     write_csv("dtw", ["run", "true_move", "best_move", "ms", "self_match"], rows)
+
+
+# -------------------------------------------------------------- threshold
+
+def _time_warp(seq: np.ndarray, speed: float, length: int) -> np.ndarray:
+    """Replay a (T, 99) clip at ``speed`` and return ``length`` frames (looping)."""
+    t = (np.arange(length) * speed) % (seq.shape[0] - 1)
+    lo = np.floor(t).astype(int)
+    frac = (t - lo)[:, None].astype(np.float32)
+    return seq[lo] * (1 - frac) + seq[lo + 1] * frac
+
+
+def bench_threshold(args: argparse.Namespace) -> None:
+    from app.dtw_engine import DEFAULT_WINDOW_LEN, compare_to_move, load_reference_library
+
+    library = [m for m in load_reference_library(REFERENCE_DIR) if m.num_frames >= DEFAULT_WINDOW_LEN]
+    rng = np.random.default_rng(args.seed)
+    n = DEFAULT_WINDOW_LEN
+    print(f"\n[threshold] {len(library)} moves, window={n}, noise={args.noise}, speeds={args.speeds}")
+
+    rows: list[list] = []
+    by_kind: dict[str, list[float]] = {}
+    for move in library:
+        cases = []
+        for speed in args.speeds:
+            live = _time_warp(move.sequence, speed, n)
+            live = live + rng.normal(0, args.noise, live.shape).astype(np.float32)
+            cases.append(("same_move_warped", f"{move.name}@{speed}x", live))
+        for other in library:
+            if other.name != move.name:
+                cases.append(("other_move", other.name, other.sequence[:n]))
+        for frame in (0, move.num_frames // 2):
+            cases.append(("held_still", f"{move.name}[{frame}]", np.repeat(move.sequence[frame:frame + 1], n, axis=0)))
+        for kind, source, live in cases:
+            d = compare_to_move(live, move).distance
+            by_kind.setdefault(kind, []).append(d)
+            rows.append([move.name, kind, source, f"{d:.1f}", f"{move.dtw_threshold:.1f}", int(d <= move.dtw_threshold)])
+
+    thresholds = sorted({m.dtw_threshold for m in library})
+    print(f"current dtw_threshold values: {thresholds}")
+    for kind, vals in by_kind.items():
+        print(f"{kind:>17}: n={len(vals)}  min={min(vals):.0f}  p50={pct(vals, 50):.0f}  max={max(vals):.0f}")
+    write_csv("threshold", ["reference", "kind", "source", "distance", "threshold", "aligned"], rows,
+              Path(args.out_dir) if args.out_dir else OUT_DIR)
 
 
 # ------------------------------------------------------------------- pose
@@ -319,6 +370,11 @@ def main() -> None:
 
     p_dtw = sub.add_parser("dtw", help="time full-library DTW comparisons")
     p_pose = sub.add_parser("pose", help="time MediaPipe (and optional background DTW) on a video")
+    p_thr = sub.add_parser("threshold", help="DTW distances: same move vs other moves vs standing still")
+    p_thr.add_argument("--noise", type=float, default=0.05, help="noise added to the warped clip")
+    p_thr.add_argument("--speeds", type=float, nargs="+", default=[0.8, 1.0, 1.25])
+    p_thr.add_argument("--seed", type=int, default=0)
+    p_thr.add_argument("--out-dir", help="where to write the CSV (default backend/recordings)")
     p_coach = sub.add_parser("coach", help="time and check Claude Haiku cues (real API calls)")
     p_all = sub.add_parser("all", help="run every stage that has what it needs")
 
@@ -346,7 +402,8 @@ def main() -> None:
         else:
             print("\n[coach] skipped, no ANTHROPIC_API_KEY found")
         return
-    {"dtw": bench_dtw, "pose": bench_pose, "coach": bench_coach}[args.stage](args)
+    {"dtw": bench_dtw, "pose": bench_pose, "coach": bench_coach,
+     "threshold": bench_threshold}[args.stage](args)
 
 
 if __name__ == "__main__":

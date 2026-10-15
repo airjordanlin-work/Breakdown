@@ -300,9 +300,8 @@ export default function Session({ sessionId, onEnd }) {
 
           {stats && (
             <div className="sess-chip" aria-label="Score">
-              <span>{stats.total_points.toLocaleString()}</span>
-              <span>{stats.grade}</span>
-              <span>{stats.streak}×</span>
+              <span>{stats.clean_reps ?? 0}/{stats.reps ?? 0} clean</span>
+              <span>{stats.clean_streak ?? 0}×</span>
             </div>
           )}
 
