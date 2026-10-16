@@ -16,10 +16,10 @@ Every body claim must come from measured data (CLAUDE.md rule 1, spec 3.6). Unti
 
 AIST++ labels its break clips by number, not by move name. The catalog measures each clip (`backend/app/move_catalog.py`):
 
-- BR 01: no floor time, no inversion. A standing, stepping move, so it is the toprock candidate.
+- BR 01: no floor time, no inversion. A standing, stepping move. Confirmed by Jordan on 2026-10-16 as the toprock move called cross step, so its meta file now sets `display_name` to "Cross step".
 - BR 09: hips near the floor for most of the clip, no inversion. The footwork candidate.
 
-Jordan should confirm both by watching the library preview. Once confirmed, add `display_name` to their meta files.
+BR 09 still needs Jordan to confirm it by watching the library preview. Once confirmed, add `display_name` to its meta file.
 
 ## Features per move
 
@@ -27,8 +27,8 @@ All features are measured on x and y only (the plane the phone camera sees and D
 
 | Move | Feature | How it is measured | Spoken fix | Status |
 | --- | --- | --- | --- | --- |
-| Toprock (BR 01) | `hip_turn` | 1 minus narrowest / widest apparent hip width over the rep (10th and 90th percentile). Hips turning away from the camera look narrower. | "Twist your hips more" | EXISTS |
-| Toprock (BR 01) | `leg_reach` | 90th percentile of how far a foot gets out to the side of the hips, in torso lengths. | "Extend that leg out" | EXISTS |
+| Toprock, cross step (BR 01) | `hip_turn` | 1 minus narrowest / widest apparent hip width over the rep (10th and 90th percentile). Hips turning away from the camera look narrower. | "Twist your hips more" | EXISTS |
+| Toprock, cross step (BR 01) | `leg_reach` | 90th percentile of how far a foot gets out to the side of the hips, in torso lengths. | "Extend that leg out" | EXISTS |
 | Footwork (BR 09) | `leg_reach` | Same as above, for the sweeping leg. | "Kick that leg out wider" | PROPOSED (one meta line, needs a check on real footwork first) |
 | Footwork (BR 09) | `hips_low` | Hip height above the lowest body point, in hip widths, reusing the catalog's floor measure. | "Get your hips lower" | PROPOSED |
 | Any | shoulder and hip separation | Needs depth. MediaPipe depth from one phone camera is too rough. | none | Not planned |
@@ -81,7 +81,7 @@ The demo animates the same converted AIST++ keypoints the move library preview a
 ## Next steps
 
 1. Device test above, then tune the cut-offs.
-2. Confirm toprock and footwork clip names, add `display_name`.
+2. Confirm the footwork clip name (BR 09) and add its `display_name`. BR 01 is done (cross step).
 3. Add `leg_reach` and `hips_low` to the footwork move.
 4. Extend the benchmark: feature values on labeled good and bad reps, committed under `docs/benchmarks/`.
 5. Voice "show me" with push-to-talk (M3).

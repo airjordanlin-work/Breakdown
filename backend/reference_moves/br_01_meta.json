@@ -1,5 +1,6 @@
 {
   "name": "br_01",
+  "display_name": "Cross step",
   "dtw_threshold": 2000.0,
   "source": "AIST++",
   "original_file": "gBR_sBM_cAll_d04_mBR0_ch01.pkl",
