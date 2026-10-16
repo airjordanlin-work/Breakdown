@@ -93,7 +93,7 @@ FIX_PHRASES = {
     "straighten": "straighten",
     "bend": "bend",
     "twist": "twist more through the rep",
-    "reach": "reach out further from the hips",
+    "reach": "reach out further to the side",
 }
 _CLOSE_TEMPLATES = ["Almost, {fix} your {joint}", "Close, {fix} your {joint} a bit", "Nearly, {fix} your {joint}"]
 _PERFECT_TEMPLATES = ["Yes, that's it", "Clean, keep going", "Just like that", "That's the one"]
@@ -359,9 +359,14 @@ class AICoach:
         """No live cues for ``seconds``, e.g. while the dancer watches a demo."""
         self._quiet_until = max(self._quiet_until, time.time() + max(0.0, seconds))
 
+    @property
+    def held(self) -> bool:
+        """True while a demo hold is active: nothing live or debrief should speak."""
+        return time.time() < self._quiet_until
+
     def can_fire_now(self) -> bool:
         """For event-driven cues (like a finished freeze) that skip the cooldown."""
-        return not self._pending
+        return not self._pending and not self.held
 
     def should_fire(
         self,

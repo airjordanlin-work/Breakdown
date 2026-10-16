@@ -27,8 +27,8 @@ All features are measured on x and y only (the plane the phone camera sees and D
 
 | Move | Feature | How it is measured | Spoken fix | Status |
 | --- | --- | --- | --- | --- |
-| Toprock, cross step (BR 01) | `hip_turn` | 1 minus narrowest / widest apparent hip width over the rep (10th and 90th percentile). Hips turning away from the camera look narrower. | "Twist your hips more" | EXISTS |
-| Toprock, cross step (BR 01) | `leg_reach` | 90th percentile of how far a foot gets out to the side of the hips, in torso lengths. | "Extend that leg out" | EXISTS |
+| Toprock, cross step (BR 01) | `hip_turn` | 1 minus narrowest / widest hip width as a share of shoulder width over the rep (10th and 90th percentile). Hips turning away from the camera look narrower. A ratio, because live frames are rescaled by hip width every frame. | "Twist your hips more" | EXISTS |
+| Toprock, cross step (BR 01) | `leg_reach` | 90th percentile of how far a foot gets out to the side of the hips, in torso lengths, measured per frame. | "Extend that leg out" | EXISTS |
 | Footwork (BR 09) | `leg_reach` | Same as above, for the sweeping leg. | "Kick that leg out wider" | PROPOSED (one meta line, needs a check on real footwork first) |
 | Footwork (BR 09) | `hips_low` | Hip height above the lowest body point, in hip widths, reusing the catalog's floor measure. | "Get your hips lower" | PROPOSED |
 | Any | shoulder and hip separation | Needs depth. MediaPipe depth from one phone camera is too rough. | none | Not planned |

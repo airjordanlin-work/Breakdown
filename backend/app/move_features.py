@@ -31,28 +31,41 @@ MIN_REFERENCE = 1e-3   # a reference value this small means the move has no such
 
 
 def hip_turn(seq: np.ndarray) -> float:
-    """How far the hips twist during the rep, 0 (square the whole time) to 1.
+    """How far the hips twist against the shoulders during the rep, 0 to 1.
 
-    As the hips turn away from the camera their apparent width shrinks, so
-    1 - narrow / wide over the rep tracks the twist without needing depth.
-    Percentiles drop single noisy frames.
+    As the hips turn away from the camera their apparent width shrinks. The
+    live window is rescaled every frame by hip width, which would divide that
+    signal away, so each frame measures hip width as a share of shoulder
+    width. A ratio does not change under uniform rescaling, so the live and
+    reference paths agree. 1 - narrow / wide over the rep, with percentiles to
+    drop single noisy frames.
     """
-    width = np.abs(seq[:, L_HIP, 0] - seq[:, R_HIP, 0])
-    wide = float(np.percentile(width, 90))
+    hip_w = np.abs(seq[:, L_HIP, 0] - seq[:, R_HIP, 0])
+    sh_w = np.abs(seq[:, L_SH, 0] - seq[:, R_SH, 0])
+    ok = sh_w > 1e-6
+    if ok.sum() < 2:
+        return 0.0
+    share = hip_w[ok] / sh_w[ok]
+    wide = float(np.percentile(share, 90))
     if wide <= 0:
         return 0.0
-    return float(1.0 - np.percentile(width, 10) / wide)
+    return float(1.0 - np.percentile(share, 10) / wide)
 
 
 def leg_reach(seq: np.ndarray) -> float:
-    """How far a foot gets out to the side of the hips, in torso lengths."""
+    """How far a foot gets out to the side of the hips, in torso lengths.
+
+    Measured per frame against that frame's own torso length, so per-frame
+    rescaling of the live window cancels out.
+    """
     mid_hip = (seq[:, L_HIP, :2] + seq[:, R_HIP, :2]) / 2
     mid_sh = (seq[:, L_SH, :2] + seq[:, R_SH, :2]) / 2
-    torso = float(np.median(np.linalg.norm(mid_sh - mid_hip, axis=1)))
-    if torso <= 0:
+    torso = np.linalg.norm(mid_sh - mid_hip, axis=1)
+    ok = torso > 1e-6
+    if not ok.any():
         return 0.0
     out = np.abs(seq[:, [L_AN, R_AN], 0] - mid_hip[:, None, 0]).max(axis=1)
-    return float(np.percentile(out, 90) / torso)
+    return float(np.percentile(out[ok] / torso[ok], 90))
 
 
 @dataclass(frozen=True)

@@ -25,12 +25,19 @@ def _ref(name="br_01"):
 
 
 def _square_hips(seq):
-    """Same rep, but the hips never turn: their x positions stay at the widest frame."""
+    """Same rep, but the hips never turn: hip width stays a fixed share of shoulder width."""
     out = seq.copy()
-    widest = int(np.argmax(np.abs(seq[:, L_HIP, 0] - seq[:, R_HIP, 0])))
-    out[:, L_HIP, 0] = seq[widest, L_HIP, 0] - seq[widest, [L_HIP, R_HIP], 0].mean() + seq[:, [L_HIP, R_HIP], 0].mean(axis=1)
-    out[:, R_HIP, 0] = seq[widest, R_HIP, 0] - seq[widest, [L_HIP, R_HIP], 0].mean() + seq[:, [L_HIP, R_HIP], 0].mean(axis=1)
+    mid = seq[:, [L_HIP, R_HIP], 0].mean(axis=1)
+    half = np.abs(seq[:, 11, 0] - seq[:, 12, 0]) * 0.5 * 0.7
+    out[:, L_HIP, 0] = mid - half * np.sign(seq[:, L_HIP, 0] - seq[:, R_HIP, 0])
+    out[:, R_HIP, 0] = mid + half * np.sign(seq[:, L_HIP, 0] - seq[:, R_HIP, 0])
     return out
+
+
+def _live(seq):
+    """What the live pipeline hands the scorer: every frame normalized by its own hip width."""
+    from app.pose_estimator import normalize_landmarks
+    return np.stack([normalize_landmarks(f) for f in seq])
 
 
 def _short_steps(seq, factor=0.3):
@@ -135,3 +142,31 @@ def test_twist_is_refused_unless_measured():
     assert ungrounded_claims("Twist your hips", elbow)
     hips = live_facts("BR 01", _rep("hips", "twist"))
     assert ungrounded_claims("Twist those hips more", hips) == []
+
+
+def test_reference_through_live_normalization_scores_clean():
+    """Regression: live frames are rescaled per frame, which once erased the hip twist."""
+    ref = _ref()
+    results = compare(["hip_turn", "leg_reach"], _live(ref), ref)
+    assert [r.tier for r in results] == ["Perfect", "Perfect"]
+    assert all(0.9 <= r.ratio <= 1.1 for r in results)
+
+
+def test_square_hips_still_miss_after_live_normalization():
+    ref = _ref()
+    (r,) = compare(["hip_turn"], _live(_square_hips(ref)), ref)
+    assert r.tier == "Miss"
+
+
+def test_short_steps_still_miss_after_live_normalization():
+    ref = _ref()
+    (r,) = compare(["leg_reach"], _live(_short_steps(ref)), ref)
+    assert r.tier == "Miss"
+
+
+def test_scorer_gives_a_normalized_reference_all_perfect():
+    scorer = Scorer(REF_DIR)
+    ref = _ref()
+    result = scorer.score_rep(_aligned(len(ref)), list(_live(ref)))
+    assert result is not None
+    assert [r.tier for r in result.results] == ["Perfect"] * len(result.results)

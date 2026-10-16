@@ -576,6 +576,9 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                 # everything else waits for the normal cooldown.
                 coach = session.ai_coach
                 debrief_reps = coach_ctx.get("debrief_reps")
+                if debrief_reps and coach.held:
+                    # The dancer is watching a demo; the debrief would talk over it.
+                    continue
                 if debrief_reps:
                     # The dancer just stopped: one debrief for that attempt.
                     async def _fire_debrief(ctx=coach_ctx, reps=debrief_reps):
@@ -631,10 +634,15 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                 demo_msg, line, quiet_s = demo
                 session.ai_coach.hold(quiet_s)
                 await websocket.send_text(json.dumps(demo_msg))
-                try:
-                    await send_coach_cue(websocket, session.voice, line, mode="demo")
-                except Exception:
-                    pass  # socket closed mid-send
+
+                async def _fire_demo(line=line):
+                    async with session.speak_lock:
+                        try:
+                            await send_coach_cue(websocket, session.voice, line, mode="demo")
+                        except Exception:
+                            pass  # socket closed mid-send
+
+                _track(session, asyncio.create_task(_fire_demo()))
 
             elif msg.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})

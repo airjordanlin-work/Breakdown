@@ -1,5 +1,6 @@
 """Slow demo on request: the clip, what to highlight, and a grounded line."""
 
+import asyncio
 import json
 import threading
 
@@ -84,6 +85,8 @@ def make_session(move_id):
     s.scorer = Scorer(server.REFERENCE_DIR)
     s.move_id = move_id
     s.dtw_result = None
+    s.speak_lock = asyncio.Lock()
+    s.coach_tasks = set()
     return s
 
 
@@ -114,3 +117,10 @@ def test_socket_demo_without_a_move_says_so():
                 "type": "demo_unavailable", "reason": "Pick a move first"}
     finally:
         server._sessions.pop("sess-nodemo", None)
+
+
+def test_hold_blocks_event_cues_and_debrief():
+    coach = AICoach(llm=lambda *a: None)
+    assert not coach.held and coach.can_fire_now()
+    coach.hold(5.0)
+    assert coach.held and not coach.can_fire_now()
