@@ -1,6 +1,6 @@
 # Phone demo: steps and manual test checklist
 
-This is the M1 demo from the [product spec](PRODUCT_SPEC.html) (section 11): a short video of a phone session with spoken cues. It covers FR-1 (camera over HTTPS), FR-3 (skeleton and framing guide), FR-5 and FR-6 (move matching and scoring), FR-10 (coach audio on the phone) and FR-14 (debrief after an attempt).
+This is the M1 demo from the [product spec](PRODUCT_SPEC.html) (section 11): a 60-second clip of a phone session with spoken cues. It covers FR-1 (camera over HTTPS), FR-3 (skeleton and framing guide), FR-5 and FR-6 (move matching and scoring), FR-10 (coach audio on the phone) and FR-14 (debrief after an attempt).
 
 Everything here runs on your laptop. The phone only opens a web page. None of these steps can be checked from a cloud session, so the checklist below is filled in by hand on a real device.
 
@@ -20,7 +20,7 @@ Skip the PROPOSED rows for this clip. Add them to the checklist once those PRs l
 
 ## Before you start
 
-1. Pull `main` and set up the backend, frontend, coach and voice as in the README, sections 1 to 3. You need `ANTHROPIC_API_KEY` in `.env` and the two Kokoro model files in `backend/` or the coach stays silent.
+1. Pull `main` and set up the backend, frontend, coach and voice as in the README, sections 1 to 3. Without `ANTHROPIC_API_KEY` in `.env` the coach falls back to templated lines, and without the two Kokoro model files in `backend/` cues show as captions only.
 2. Generate an access token and put it in `.env` as `ACCESS_TOKEN` (`.env.example` has the one-line command). Do this before any tunnel starts.
 3. Install cloudflared (`brew install cloudflared`).
 4. Clear a practice space and find a spot to prop the phone in portrait, about hip height, 2 to 3 meters from where you will dance.
@@ -34,7 +34,7 @@ Skip the PROPOSED rows for this clip. Add them to the checklist once those PRs l
    ./dev.sh
    ```
 
-   Check the backend log. You should see the coach report it is ready and no warning that `ACCESS_TOKEN` is unset. If you see `Coach voice is off` later in the app, Kokoro did not load; the log says why.
+   Check the backend log for a warning that `ACCESS_TOKEN` is unset. There should be none. The coach and voice only load when a session starts, so check them after step 5 below: the log should print `AICoach: ready` and `VoiceCoach: ready`. If the app shows `Coach voice is off`, Kokoro did not load; the log says why.
 
 2. In a second terminal, start the tunnel:
 
@@ -96,7 +96,7 @@ Fill this in on the device. Write down what you saw, not what you expected. If a
 - [ ] Tunnel stopped with Ctrl+C when done
 
 **Grounding spot check (rule 1 in CLAUDE.md)**
-- [ ] Every cue and the debrief only mention things on screen or in the move's tips (a joint, a rep count, a streak). Note any cue that states a number or body fact you cannot see in the app.
+- [ ] Every cue and the debrief only mention things on screen or in the move card (a joint, a rep count, a streak). BR 01 has no tips in its metadata yet, so its card shows none and cues should rest on the score and rep data only. Note any cue that states a number or body fact you cannot see in the app.
 
 ## After recording
 
