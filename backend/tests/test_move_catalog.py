@@ -157,3 +157,11 @@ def test_extreme_finite_power_serializes(tmp_path):
 def test_preview_without_duration_keeps_default_fps(tmp_path):
     save(tmp_path, "a", standing())
     assert preview(tmp_path, "a")["fps"] == PREVIEW_FPS
+
+
+def test_br_01_is_named_cross_step():
+    # Jordan confirmed AIST++ br_01 is the toprock move called cross step.
+    from pathlib import Path
+    ref_dir = Path(__file__).resolve().parents[1] / "reference_moves"
+    move = next(m for m in load_catalog(ref_dir) if m.id == "br_01")
+    assert move.display_name == "Cross step"

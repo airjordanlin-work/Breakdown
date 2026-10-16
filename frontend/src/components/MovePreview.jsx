@@ -20,14 +20,17 @@ function bounds(frames) {
   return { minX, maxX, minY, maxY };
 }
 
-export default function MovePreview({ moveId, title }) {
+// highlight: preview joint indices to ring, e.g. the joint the coach is
+// talking about during a demo. initialSpeed: starting playback speed.
+export default function MovePreview({ moveId, title, highlight = [], initialSpeed = DEFAULT_SPEED }) {
   const canvasRef = useRef(null);
   const [data, setData] = useState(() => cache.get(moveId) || null);
   const [error, setError] = useState(null);
   const [playing, setPlaying] = useState(() => !prefersReducedMotion());
-  const [speed, setSpeed] = useState(DEFAULT_SPEED);
+  const [speed, setSpeed] = useState(initialSpeed);
   const [view, setView] = useState("figure");
   const posRef = useRef(0);       // fractional frame position, for smooth slow motion
+  const highlightKey = highlight.join(",");   // stable dependency for the draw effect
 
   useEffect(() => {
     setError(null);
@@ -94,6 +97,13 @@ export default function MovePreview({ moveId, title }) {
         ctx.fillStyle = "#eee9e0";
         ctx.beginPath(); ctx.arc(hx, hy, 9, 0, Math.PI * 2); ctx.fill();
       }
+      for (const i of highlightKey ? highlightKey.split(",").map(Number) : []) {
+        if (!pose[i]) continue;
+        const [jx, jy] = map(pose[i]);
+        ctx.strokeStyle = "#ffc14c";
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(jx, jy, Math.max(10, unit * 0.45), 0, Math.PI * 2); ctx.stroke();
+      }
     };
 
     const tick = (now) => {
@@ -108,7 +118,7 @@ export default function MovePreview({ moveId, title }) {
     const onResize = () => render();
     window.addEventListener("resize", onResize);
     return () => { cancelAnimationFrame(raf); window.removeEventListener("resize", onResize); };
-  }, [data, playing, speed, view]);
+  }, [data, playing, speed, view, highlightKey]);
 
   return (
     <figure className="stage" aria-label={`Animated preview of ${title}`}>

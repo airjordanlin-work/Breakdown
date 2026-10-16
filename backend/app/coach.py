@@ -84,8 +84,18 @@ _LIMB_WORDS = {"wrist": "base arm", "leg": "legs"}
 _FIX_TEMPLATES = {
     "straighten": ["Straighten your {joint}", "Open up that {joint}", "Reach through your {joint}"],
     "bend":       ["Bend your {joint} more", "Bring your {joint} in", "Soften that {joint}"],
+    # whole-rep features (app/move_features.py)
+    "twist":      ["Twist your {joint} more", "Turn those {joint} more", "More twist in the {joint}"],
+    "reach":      ["Extend that {joint} out", "Reach your {joint} out more", "Kick that {joint} out wider"],
 }
-_CLOSE_TEMPLATES = ["Almost, {fix} your {joint}", "Close, {fix} that {joint}", "Nearly, {fix} your {joint}"]
+# How the prompt says each fix: "their hips need to twist more".
+FIX_PHRASES = {
+    "straighten": "straighten",
+    "bend": "bend",
+    "twist": "twist more through the rep",
+    "reach": "reach out further to the side",
+}
+_CLOSE_TEMPLATES = ["Almost, {fix} your {joint}", "Close, {fix} your {joint} a bit", "Nearly, {fix} your {joint}"]
 _PERFECT_TEMPLATES = ["Yes, that's it", "Clean, keep going", "Just like that", "That's the one"]
 _ENCOURAGE_TEMPLATES = ["Keep it moving", "Nice, stay with it", "Good, keep flowing", "Stay loose"]
 _FREEZE_CLEAN_TEMPLATES = ["Solid hold", "Nice freeze", "Locked in, nice"]
@@ -197,10 +207,12 @@ def _build_prompt(
         else:
             lines.append("Do not name any body part.")
     elif focus["tier"] == "Miss":
-        lines.append(f"Measured: their {focus['joint']} needs to {focus['fix']}.")
+        phrase = FIX_PHRASES.get(focus["fix"], focus["fix"])
+        lines.append(f"Measured: their {focus['joint']} needs to {phrase}.")
         lines.append(f"Give one clear correction about the {focus['joint']}.")
     elif focus["tier"] == "Close":
-        lines.append(f"Measured: their {focus['joint']} is close, it needs to {focus['fix']} a little.")
+        phrase = FIX_PHRASES.get(focus["fix"], focus["fix"])
+        lines.append(f"Measured: their {focus['joint']} is close, it needs to {phrase} a little.")
         lines.append(f"Give one small, encouraging refinement about the {focus['joint']}.")
     else:
         lines.append("Measured: every checked joint matched the reference.")
@@ -246,7 +258,8 @@ def fallback_cue(
     if focus["tier"] == "Perfect":
         return _pick(_PERFECT_TEMPLATES, recent_cues)
     if focus["tier"] == "Miss":
-        options = [t.format(joint=focus["joint"]) for t in _FIX_TEMPLATES[focus["fix"]]]
+        templates = _FIX_TEMPLATES.get(focus["fix"], _FIX_TEMPLATES["straighten"])
+        options = [t.format(joint=focus["joint"]) for t in templates]
     else:
         options = [t.format(joint=focus["joint"], fix=focus["fix"]) for t in _CLOSE_TEMPLATES]
     return _pick(options, recent_cues)
@@ -330,6 +343,7 @@ class AICoach:
         self._llm: LLMClient      = llm or anthropic_complete
         self._available: bool     = llm is not None or bool(ANTHROPIC_API_KEY)
         self.refused: int         = 0   # replies dropped by the grounding guard
+        self._quiet_until: float  = 0.0  # no live cues before this time (a demo is playing)
 
         if not self._available:
             print("AICoach: ANTHROPIC_API_KEY not set — using templated cues")
@@ -341,9 +355,18 @@ class AICoach:
     def _pending(self) -> bool:
         return self._inflight > 0
 
+    def hold(self, seconds: float) -> None:
+        """No live cues for ``seconds``, e.g. while the dancer watches a demo."""
+        self._quiet_until = max(self._quiet_until, time.time() + max(0.0, seconds))
+
+    @property
+    def held(self) -> bool:
+        """True while a demo hold is active: nothing live or debrief should speak."""
+        return time.time() < self._quiet_until
+
     def can_fire_now(self) -> bool:
         """For event-driven cues (like a finished freeze) that skip the cooldown."""
-        return not self._pending
+        return not self._pending and not self.held
 
     def should_fire(
         self,
@@ -359,6 +382,8 @@ class AICoach:
         silence; the on-screen guide handles framing.
         """
         if self._pending or not (tracked and moving and fill_ratio >= 1.0):
+            return False
+        if time.time() < self._quiet_until:
             return False
         cooldown = COOLDOWN_SECONDS if has_score else COOLDOWN_ENCOURAGE
         return time.time() - self._last_called >= cooldown
