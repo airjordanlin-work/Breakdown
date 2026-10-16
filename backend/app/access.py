@@ -34,5 +34,7 @@ def token_is_valid(supplied: str | None, expected: str) -> bool:
 
 async def require_token(conn: HTTPConnection) -> None:
     supplied = conn.headers.get(HEADER) or conn.query_params.get(QUERY_PARAM)
+    if supplied:
+        supplied = supplied.strip()
     if not token_is_valid(supplied, configured_token()):
         raise HTTPException(status_code=401, detail="Missing or wrong access token")

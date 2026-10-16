@@ -42,7 +42,7 @@ Skip the PROPOSED rows for this clip. Add them to the checklist once those PRs l
    cloudflared tunnel --url http://localhost:5173
    ```
 
-3. On the iPhone, open the `https://...trycloudflare.com` address it prints, with your token added once: `/?token=YOUR_TOKEN`. Type it on the phone or AirDrop it. Do not paste the URL or the token into a chat, issue or commit.
+3. On the iPhone, open the `https://...trycloudflare.com` address it prints, with your token added once: `/?token=YOUR_TOKEN`. Type it on the phone or AirDrop it. Do not paste the URL or the token into a chat, issue or commit. A quick tunnel gets a new hostname every time cloudflared starts, and the phone saves the token per hostname, so add `?token=` again after each restart. A 401 for `/moves` or the WebSocket in the backend log means the token was missing or did not match.
 4. Allow camera access when Safari asks.
 5. In the move library, pick **BR 01**. This is the toprock cross step. Read its card, then tap **Start practice**.
 6. Tap the screen once. If **TAP FOR SOUND** is showing, tap it until it goes away.

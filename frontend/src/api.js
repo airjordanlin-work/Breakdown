@@ -11,13 +11,15 @@ const TOKEN_KEY = "breakdown_access_token";
 function loadToken() {
   try {
     const url = new URL(window.location.href);
-    const fromUrl = url.searchParams.get("token");
+    // Trim: a stray space (typed or from an AirDrop paste) would be sent in the
+    // WebSocket query string, where browsers do not strip it as they do in headers.
+    const fromUrl = (url.searchParams.get("token") || "").trim();
     if (fromUrl) {
       localStorage.setItem(TOKEN_KEY, fromUrl);
       url.searchParams.delete("token");
       window.history.replaceState(null, "", url.pathname + url.search + url.hash);
     }
-    return localStorage.getItem(TOKEN_KEY) || "";
+    return (localStorage.getItem(TOKEN_KEY) || "").trim();
   } catch {
     return "";
   }

@@ -50,6 +50,15 @@ def test_websocket_accepts_token(monkeypatch):
         assert ws.receive_json() == {"error": "session not found"}
 
 
+def test_token_whitespace_is_ignored(monkeypatch):
+    """A leading space from a typed ?token= must not break the WebSocket."""
+    monkeypatch.setenv("ACCESS_TOKEN", " s3cret ")
+    assert client.get("/moves?token=%20s3cret").status_code == 200
+    assert client.get("/moves", headers={"X-Access-Token": "s3cret"}).status_code == 200
+    with client.websocket_connect("/ws/missing?token=%20s3cret") as ws:
+        assert ws.receive_json() == {"error": "session not found"}
+
+
 def test_docs_and_openapi_are_off(monkeypatch):
     monkeypatch.delenv("ACCESS_TOKEN", raising=False)
     for path in ("/docs", "/redoc", "/openapi.json"):
