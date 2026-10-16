@@ -6,7 +6,7 @@ It started as a personal problem. Practicing alone means nobody tells you if you
 
 The goal is a coach that needs nothing but the phone you already own. Wearable motion sensors are an optional add-on for moves the camera can't see well.
 
-**Demo video coming.**
+**Demo video coming.** Steps to run the phone demo and a manual test checklist are in [`docs/DEMO.md`](docs/DEMO.md).
 
 ## Status
 
