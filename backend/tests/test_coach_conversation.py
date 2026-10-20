@@ -139,10 +139,59 @@ def test_templated_debrief_names_the_focus_joint():
 def test_debrief_without_key_uses_template(monkeypatch):
     c = AICoach()
     monkeypatch.setattr(c, "_available", False)
-    assert debrief(c, [CLEAN, CLEAN]) == "All 2 reps clean, nice. Keep that going."
+    assert debrief(c, [CLEAN, CLEAN]) == "All 2 reps clean, nice work. Keep that going."
 
 
 def test_debrief_does_not_block_and_does_not_leave_coach_pending():
     c = AICoach(llm=FakeLLM("Clean rep, nice."))
     debrief(c, [CLEAN])
     assert c.can_fire_now()
+
+
+def test_debrief_that_claims_rhythm_is_refused():
+    c = AICoach(llm=FakeLLM("Nice work. Stay on the beat and keep a steady rhythm next round."))
+    out = debrief(c, [MISS_L, CLEAN])
+    assert "rhythm" not in out
+    assert out == fallback_debrief(attempt_facts("BR 01", [MISS_L, CLEAN]))
+
+
+def test_longer_explaining_debrief_is_allowed():
+    text = ("Two clean out of three, that's solid work. Your left elbow keeps folding, "
+            "so really straighten it, because a bigger shape reads cleaner. You've got this, go again.")
+    c = AICoach(llm=FakeLLM(text))
+    assert debrief(c, [MISS_L, CLEAN, CLEAN]) == text
+
+
+def test_guard_allows_everyday_phrases_with_body_part_words():
+    facts = attempt_facts("BR 01", [MISS_L, CLEAN])
+    for ok in ("Nice work, now get back in there and go again.",
+               "Head back in and try again.",
+               "On the other hand, that was a solid round.",
+               "Don't beat yourself up, go again.",
+               "Here's the move at half speed."):
+        assert ungrounded_claims(ok, facts) == [], ok
+
+
+def test_guard_still_refuses_your_back_and_head():
+    facts = attempt_facts("BR 01", [MISS_L, CLEAN])
+    for bad in ("Keep your back straight.", "Lift your head up."):
+        assert ungrounded_claims(bad, facts) != [], bad
+
+
+def test_guard_refuses_unmeasured_timing_and_trend_claims():
+    facts = attempt_facts("BR 01", [MISS_L, CLEAN])
+    for bad in ("Stay steady on the count and keep your pace.",
+                "That's getting smoother, great groove.",
+                "Keep it in time with the music.",
+                "You are getting better and faster.",
+                "Speed up and match your speed to the count.",
+                "Move on the beat."):
+        assert ungrounded_claims(bad, facts) != [], bad
+
+
+def test_templated_debrief_claims_nothing_without_a_clean_rep():
+    facts = attempt_facts("BR 01", [MISS_L, MISS_L])
+    text = fallback_debrief(facts)
+    for phrase in ("building something", "right track", "bigger", "you know you can"):
+        assert phrase not in text
+    assert ungrounded_claims(text, facts) == [], text
