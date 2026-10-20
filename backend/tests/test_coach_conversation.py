@@ -167,7 +167,8 @@ def test_guard_allows_everyday_phrases_with_body_part_words():
     for ok in ("Nice work, now get back in there and go again.",
                "Head back in and try again.",
                "On the other hand, that was a solid round.",
-               "Don't beat yourself up, go again."):
+               "Don't beat yourself up, go again.",
+               "Here's the move at half speed."):
         assert ungrounded_claims(ok, facts) == [], ok
 
 
@@ -183,6 +184,7 @@ def test_guard_refuses_unmeasured_timing_and_trend_claims():
                 "That's getting smoother, great groove.",
                 "Keep it in time with the music.",
                 "You are getting better and faster.",
+                "Speed up and match your speed to the count.",
                 "Move on the beat."):
         assert ungrounded_claims(bad, facts) != [], bad
 

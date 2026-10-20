@@ -13,7 +13,7 @@ What it checks:
 - numbers: digits and the words two to twenty must equal a number in the
   facts. "one" is skipped because it is mostly a pronoun ("that's the one").
 - rotation: "twist" or "rotate" needs a measured hip twist in the facts.
-- timing: beat, rhythm, tempo, timing, count, pace, speed, faster, slower, groove and
+- timing: beat, rhythm, tempo, timing, count, pace, your speed, speeding up, faster, slower, groove and
   music are refused, since the app does not measure music or timing yet.
 - ambiguous words: "back", "head" and "hand" count as body parts only after a
   possessive or a side ("your back"), so "get back in there" passes.
@@ -75,7 +75,7 @@ _ROTATION = re.compile(r"\b(twist\w*|rotat\w*)\b", re.IGNORECASE)
 # "beat" only counts as a noun ("on beat", "the beat"), so "don't beat yourself up" passes.
 _TIMING = re.compile(
     r"\b(?:(?:on|off|the|your|a)\s+beats?|beats|rhythm\w*|tempo|timing|"
-    r"(?:on|off|in)\s+time|in\s+sync|(?:the|your|on the)\s+counts?|pace|speed\w*|"
+    r"(?:on|off|in)\s+time|in\s+sync|(?:the|your|on the)\s+counts?|pace|your\s+speed|speed(?:ing|\s+up)|"
     r"faster|slower|groove\w*|music\w*|songs?)\b",
     re.IGNORECASE,
 )
