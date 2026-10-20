@@ -41,7 +41,7 @@ COOLDOWN_ENCOURAGE = 15.0    # moving, but no joint data yet: speak less
 RECENT_CUES       = 4        # never repeat one of the last few cues
 TIMEOUT_SECONDS   = 4.0      # max wait for API response
 DEBRIEF_MAX_TOKENS = 220
-DEBRIEF_MAX_WORDS = 55       # spec 3.2: live cues stay short; a debrief may explain, up to ~55 words
+DEBRIEF_MAX_WORDS = 65       # prompt asks for 35 to 55; the cap leaves slack so a slightly long reply is not thrown away
 DEBRIEF_TIMEOUT_SECONDS = 8.0
 STREAK_HYPE_MIN   = 2        # only mention a clean streak from this length up
 
@@ -73,17 +73,21 @@ Rules:
 - Use ONLY the FACTS block for anything about their body or results. Every body part,
   side and number you say must be in FACTS.
 - Say numbers exactly as they appear in FACTS, or not at all.
-- You may explain WHY the fix matters in plain words (a bigger, cleaner shape reads
-  better and is easier to repeat). Do not invent measurements to support it.
-- Do not talk about the beat, rhythm, tempo or timing. Nothing about those is measured.
+- You may give a plain reason the fix matters (a straight line is easier to read and to
+  repeat). Do not invent measurements to support it, and do not claim the shape got bigger
+  or smaller.
+- Say what was off on this attempt ("was off"), not that it "keeps" happening.
+- Do not talk about the beat, rhythm, tempo, count, pace, speed, groove or music. Nothing
+  about those is measured.
+- Do not say they are getting better, smoother, cleaner or faster. You have no history.
 - Never mention angles, degrees, points, grades or percentages.
 - Never compare with earlier sessions or days. You have no data about them.
 - Lead with something that went well if FACTS shows it, then the one thing to work on,
   then a short push to try again. If nothing went well yet, be kind and keep it simple.
 - You may end with one short question. At most one question.
-Example (only the style, not the facts): "That's the cross step getting smoother, nice work.
-Your left elbow keeps folding, so really straighten it and make the shape bigger, because
-that is what makes it read clean. You've got it in you, so go again."
+Example (style only, the facts will differ): "Two clean out of three on the cross step, nice
+work on those. Straighten your left elbow next round, because a straight line is easier to
+read and to repeat. Take your time and go again, you've got this."
 """
 
 # Wearable sensor names -> how a coach would say it
@@ -284,20 +288,23 @@ def fallback_debrief(facts: dict) -> str:
     reps, clean = facts.get("reps", 0), facts.get("clean_reps", 0)
     if clean == reps:
         parts = [f"All {_plural(reps, 'rep')} clean, nice work."] if reps > 1 else ["Clean rep, nice work."]
+    elif clean > 0:
+        parts = [f"That's {_plural(reps, 'rep')}, {clean} clean. Nice work on those."]
     else:
-        parts = [f"That's {_plural(reps, 'rep')}, {clean} clean, and you're building something real here."]
+        parts = [f"That's {_plural(reps, 'rep')}, {clean} clean, so let's find the one thing to fix."]
     best = facts.get("best_streak", 0)
     if best >= STREAK_HYPE_MIN and best < reps:
-        parts.append(f"Your best run was {best} in a row, so you know you can hold it.")
+        parts.append(f"Your best run was {best} in a row.")
     off = facts.get("off_most")
     if off:
         parts.append(
             f"For the next round, {off['fix']} your {off['joint']}. "
-            "Make it bigger and cleaner, it will read better and be easier to repeat."
+            "Take your time and focus on just that one thing. You've got this, go again."
         )
-        parts.append("You've got this, go again.")
+    elif clean == reps:
+        parts.append("Keep that going.")
     else:
-        parts.append("Keep that going, you're on the right track.")
+        parts.append("Go again when you're ready.")
     return " ".join(parts)
 
 

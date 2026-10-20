@@ -13,8 +13,10 @@ What it checks:
 - numbers: digits and the words two to twenty must equal a number in the
   facts. "one" is skipped because it is mostly a pronoun ("that's the one").
 - rotation: "twist" or "rotate" needs a measured hip twist in the facts.
-- timing: "beat", "rhythm", "tempo" and "timing" are refused, since the app
-  does not measure music or timing yet.
+- timing: beat, rhythm, tempo, timing, count, pace, speed, faster, slower, groove and
+  music are refused, since the app does not measure music or timing yet.
+- ambiguous words: "back", "head" and "hand" count as body parts only after a
+  possessive or a side ("your back"), so "get back in there" passes.
 - banned claims: angles, degrees, points, grades, percentages, and any
   comparison to earlier sessions, since nothing from past sessions is stored.
 
@@ -59,7 +61,8 @@ _NUMBER_RE = re.compile(
 _BANNED = re.compile(
     r"\b(degrees?|angles?|percent|points?|grades?|calories|"
     r"last (?:time|session|week|night)|yesterday|than before|"
-    r"improv\w*|personal best)\b|%|°",
+    r"improv\w*|personal best|better than|smoother|"
+    r"getting (?:better|smoother|cleaner|faster|stronger))\b|%|°",
     re.IGNORECASE,
 )
 
@@ -68,8 +71,19 @@ _BANNED = re.compile(
 _ROTATION = re.compile(r"\b(twist\w*|rotat\w*)\b", re.IGNORECASE)
 
 
-# Nothing about music or timing is measured, so a reply may not claim anything about it.
-_TIMING = re.compile(r"\b(beats?|rhythm\w*|tempo|on time|off time|timing)\b", re.IGNORECASE)
+# Nothing about music, timing or pace is measured, so a reply may not claim anything about it.
+# "beat" only counts as a noun ("on beat", "the beat"), so "don't beat yourself up" passes.
+_TIMING = re.compile(
+    r"\b(?:(?:on|off|the|your|a)\s+beats?|beats|rhythm\w*|tempo|timing|"
+    r"(?:on|off|in)\s+time|in\s+sync|(?:the|your|on the)\s+counts?|pace|speed\w*|"
+    r"faster|slower|groove\w*|music\w*|songs?)\b",
+    re.IGNORECASE,
+)
+
+# Words that are body parts only when the dancer's own body is meant: "your back"
+# is a claim, "get back in there" and "on the other hand" are not.
+_AMBIGUOUS_PARTS = {"back", "head", "hand"}
+_POSSESSIVE_BEFORE = re.compile(r"\b(?:your|their|his|her|my)\s+$", re.IGNORECASE)
 
 
 def _walk(value: Any) -> Iterable[Any]:
@@ -127,6 +141,8 @@ def ungrounded_claims(text: str, facts: dict) -> list[str]:
         side, part = (m.group(1) or "").lower(), m.group(2).lower()
         if part in _GENERIC:
             continue
+        if part in _AMBIGUOUS_PARTS and not side and not _POSSESSIVE_BEFORE.search(said[:m.start()]):
+            continue
         candidates = _LIMB_OF.get(part, (part,))
         if side:
             if not in_facts(f"{side} {part}") and not any(in_facts(f"{side} {j}") for j in candidates):
@@ -138,9 +154,8 @@ def ungrounded_claims(text: str, facts: dict) -> list[str]:
         for m in _ROTATION.finditer(said):
             flags.append(f"rotation not measured: {m.group(0)!r}")
 
-    if "rhythm" not in allowed_text and "beat" not in allowed_text:
-        for m in _TIMING.finditer(said):
-            flags.append(f"timing not measured: {m.group(0)!r}")
+    for m in _TIMING.finditer(said):
+        flags.append(f"timing not measured: {m.group(0)!r}")
 
     allowed = _allowed_numbers(facts)
     for m in _NUMBER_RE.finditer(said):
