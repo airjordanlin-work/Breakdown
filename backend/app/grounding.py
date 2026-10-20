@@ -13,6 +13,8 @@ What it checks:
 - numbers: digits and the words two to twenty must equal a number in the
   facts. "one" is skipped because it is mostly a pronoun ("that's the one").
 - rotation: "twist" or "rotate" needs a measured hip twist in the facts.
+- timing: "beat", "rhythm", "tempo" and "timing" are refused, since the app
+  does not measure music or timing yet.
 - banned claims: angles, degrees, points, grades, percentages, and any
   comparison to earlier sessions, since nothing from past sessions is stored.
 
@@ -64,6 +66,10 @@ _BANNED = re.compile(
 
 # Rotation words claim the hips or torso turned; only a measured twist allows them.
 _ROTATION = re.compile(r"\b(twist\w*|rotat\w*)\b", re.IGNORECASE)
+
+
+# Nothing about music or timing is measured, so a reply may not claim anything about it.
+_TIMING = re.compile(r"\b(beats?|rhythm\w*|tempo|on time|off time|timing)\b", re.IGNORECASE)
 
 
 def _walk(value: Any) -> Iterable[Any]:
@@ -131,6 +137,10 @@ def ungrounded_claims(text: str, facts: dict) -> list[str]:
     if "twist" not in allowed_text:
         for m in _ROTATION.finditer(said):
             flags.append(f"rotation not measured: {m.group(0)!r}")
+
+    if "rhythm" not in allowed_text and "beat" not in allowed_text:
+        for m in _TIMING.finditer(said):
+            flags.append(f"timing not measured: {m.group(0)!r}")
 
     allowed = _allowed_numbers(facts)
     for m in _NUMBER_RE.finditer(said):

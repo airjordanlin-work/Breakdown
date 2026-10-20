@@ -40,9 +40,9 @@ COOLDOWN_SECONDS  = 5.0      # between cues that carry a joint correction or pra
 COOLDOWN_ENCOURAGE = 15.0    # moving, but no joint data yet: speak less
 RECENT_CUES       = 4        # never repeat one of the last few cues
 TIMEOUT_SECONDS   = 4.0      # max wait for API response
-DEBRIEF_MAX_TOKENS = 120
-DEBRIEF_MAX_WORDS = 25       # spec 3.2: live and debrief replies stay under 25 words
-DEBRIEF_TIMEOUT_SECONDS = 6.0
+DEBRIEF_MAX_TOKENS = 220
+DEBRIEF_MAX_WORDS = 55       # spec 3.2: live cues stay short; a debrief may explain, up to ~55 words
+DEBRIEF_TIMEOUT_SECONDS = 8.0
 STREAK_HYPE_MIN   = 2        # only mention a clean streak from this length up
 
 # (system, prompt, max_tokens, timeout) -> reply text, or None on any failure.
@@ -64,16 +64,26 @@ Grounding (never break this):
 - Never compare with earlier sessions. You have no data about them.
 """
 
-DEBRIEF_SYSTEM_PROMPT = """You are a friendly breaking coach. The dancer just stopped after an attempt
-and you give them a quick spoken debrief, like a real coach would between rounds.
+DEBRIEF_SYSTEM_PROMPT = """You are a warm, encouraging breaking coach. The dancer just stopped after an
+attempt. Talk to them like a real coach between rounds: say what they did well, explain
+what to fix and why it matters for the move, then send them back in feeling capable.
 Rules:
-- 1 to 3 short spoken sentences, under 25 words in total. No lists, no emoji, no quotes.
-- Use ONLY the FACTS block. Every body part, side and number you say must be in FACTS.
+- 3 to 5 spoken sentences, about 35 to 55 words in total. No lists, no emoji, no quotes.
+- Sound like a person talking, not a report. Contractions are good. No forced slang.
+- Use ONLY the FACTS block for anything about their body or results. Every body part,
+  side and number you say must be in FACTS.
 - Say numbers exactly as they appear in FACTS, or not at all.
+- You may explain WHY the fix matters in plain words (a bigger, cleaner shape reads
+  better and is easier to repeat). Do not invent measurements to support it.
+- Do not talk about the beat, rhythm, tempo or timing. Nothing about those is measured.
 - Never mention angles, degrees, points, grades or percentages.
 - Never compare with earlier sessions or days. You have no data about them.
-- Lead with something that went well if FACTS shows it, then the one thing to work on.
+- Lead with something that went well if FACTS shows it, then the one thing to work on,
+  then a short push to try again. If nothing went well yet, be kind and keep it simple.
 - You may end with one short question. At most one question.
+Example (only the style, not the facts): "That's the cross step getting smoother, nice work.
+Your left elbow keeps folding, so really straighten it and make the shape bigger, because
+that is what makes it read clean. You've got it in you, so go again."
 """
 
 # Wearable sensor names -> how a coach would say it
@@ -273,17 +283,21 @@ def fallback_debrief(facts: dict) -> str:
     """Templated debrief from the same facts the model would get."""
     reps, clean = facts.get("reps", 0), facts.get("clean_reps", 0)
     if clean == reps:
-        parts = [f"All {_plural(reps, 'rep')} clean, nice."] if reps > 1 else ["Clean rep, nice."]
+        parts = [f"All {_plural(reps, 'rep')} clean, nice work."] if reps > 1 else ["Clean rep, nice work."]
     else:
-        parts = [f"That's {_plural(reps, 'rep')}, {clean} clean."]
+        parts = [f"That's {_plural(reps, 'rep')}, {clean} clean, and you're building something real here."]
     best = facts.get("best_streak", 0)
     if best >= STREAK_HYPE_MIN and best < reps:
-        parts.append(f"Best run was {best} in a row.")
+        parts.append(f"Your best run was {best} in a row, so you know you can hold it.")
     off = facts.get("off_most")
     if off:
-        parts.append(f"Next one, {off['fix']} your {off['joint']}.")
+        parts.append(
+            f"For the next round, {off['fix']} your {off['joint']}. "
+            "Make it bigger and cleaner, it will read better and be easier to repeat."
+        )
+        parts.append("You've got this, go again.")
     else:
-        parts.append("Keep that going.")
+        parts.append("Keep that going, you're on the right track.")
     return " ".join(parts)
 
 

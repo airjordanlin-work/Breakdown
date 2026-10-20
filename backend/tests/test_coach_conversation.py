@@ -139,10 +139,24 @@ def test_templated_debrief_names_the_focus_joint():
 def test_debrief_without_key_uses_template(monkeypatch):
     c = AICoach()
     monkeypatch.setattr(c, "_available", False)
-    assert debrief(c, [CLEAN, CLEAN]) == "All 2 reps clean, nice. Keep that going."
+    assert debrief(c, [CLEAN, CLEAN]) == "All 2 reps clean, nice work. Keep that going, you're on the right track."
 
 
 def test_debrief_does_not_block_and_does_not_leave_coach_pending():
     c = AICoach(llm=FakeLLM("Clean rep, nice."))
     debrief(c, [CLEAN])
     assert c.can_fire_now()
+
+
+def test_debrief_that_claims_rhythm_is_refused():
+    c = AICoach(llm=FakeLLM("Nice work. Stay on the beat and keep a steady rhythm next round."))
+    out = debrief(c, [MISS_L, CLEAN])
+    assert "rhythm" not in out
+    assert out == fallback_debrief(attempt_facts("BR 01", [MISS_L, CLEAN]))
+
+
+def test_longer_explaining_debrief_is_allowed():
+    text = ("Two clean out of three, that's solid work. Your left elbow keeps folding, "
+            "so really straighten it, because a bigger shape reads cleaner. You've got this, go again.")
+    c = AICoach(llm=FakeLLM(text))
+    assert debrief(c, [MISS_L, CLEAN, CLEAN]) == text

@@ -29,7 +29,7 @@ What makes it feel human: the model sees its own last few lines and is told not 
 
 Trigger: the dancer was moving, at least one rep was scored, and then they have been still or out of frame for 2 s (a starting value to tune on the phone).
 
-What it says: 1 to 3 sentences, under 25 words (spec 3.2), spoken, from that attempt's measured reps only: reps, clean reps, best streak, which joint was off most and which way, which joints landed on every rep. It may end with one short question. No points, no grade, no comparison to past sessions (nothing from past sessions is stored yet).
+What it says: 3 to 5 sentences, about 35 to 55 words (spec 3.2): praise, explain the fix and why it matters, then an uplift, spoken, from that attempt's measured reps only: reps, clean reps, best streak, which joint was off most and which way, which joints landed on every rep. It may end with one short question. No points, no grade, no comparison to past sessions (nothing from past sessions is stored yet).
 
 Fallback: a templated debrief from the same numbers when the model is missing, slow, too long or fails the guard.
 
@@ -74,6 +74,6 @@ No figure goes in docs until a committed benchmark produces it (CLAUDE.md rule 2
 ## Defaults picked (change any of these)
 
 - Voice and tone: friendly, plain, a little hype on streaks, no forced slang. Same Kokoro voice as now.
-- Debrief length: up to 3 sentences, 25 words.
+- Debrief length: up to 5 sentences, about 55 words (changed from 3 sentences, 25 words after Jordan asked for coaching that explains and uplifts).
 - Pause before a debrief: 2 s of stillness or no body.
 - Cost limit: none set in code. Live cues keep their cooldown (5 s with joint data), and there is at most one debrief per attempt.
