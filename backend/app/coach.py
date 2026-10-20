@@ -359,6 +359,10 @@ class AICoach:
         """No live cues for ``seconds``, e.g. while the dancer watches a demo."""
         self._quiet_until = max(self._quiet_until, time.time() + max(0.0, seconds))
 
+    def release(self) -> None:
+        """End a demo hold early, e.g. when the dancer closes the demo."""
+        self._quiet_until = 0.0
+
     @property
     def held(self) -> bool:
         """True while a demo hold is active: nothing live or debrief should speak."""

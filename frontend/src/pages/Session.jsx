@@ -82,7 +82,8 @@ export default function Session({ sessionId, onEnd }) {
       return;
     }
     if (msg.type === "demo") {
-      setDemo(msg);
+      // A fresh id each time, so a repeat demo always remounts the overlay.
+      setDemo({ ...msg, _n: Date.now() });
       return;
     }
     if (msg.type === "demo_unavailable") {
@@ -129,7 +130,10 @@ export default function Session({ sessionId, onEnd }) {
   const onWsOpen  = useCallback(() => setWsReady(true), []);
   const { sendFrame, canSend, sendJson } = useWebSocket(sessionId, handleMessage, onWsOpen, playChunk);
   const requestDemo = useCallback(() => sendJson({ type: "demo_request" }), [sendJson]);
-  const closeDemo   = useCallback(() => setDemo(null), []);
+  const closeDemo   = useCallback(() => {
+    setDemo(null);
+    sendJson({ type: "demo_close" });
+  }, [sendJson]);
 
   // Only send. The debug view now shows the live <video> element directly,
   // so we no longer re-render the whole page with a base64 image every frame.
@@ -334,7 +338,7 @@ export default function Session({ sessionId, onEnd }) {
 
           <FreezeMeter live={freezeLive} result={freezeDone} />
           {wsReady && !framing.ready && <FramingGuide problem={cameraError || framing.problem} />}
-          <DemoOverlay demo={demo} onClose={closeDemo} />
+          <DemoOverlay key={demo?._n} demo={demo} onClose={closeDemo} />
           <CoachCue cue={coachCue} size={CAPTION_SIZES[capSize]} />
         </div>
 

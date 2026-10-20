@@ -124,3 +124,44 @@ def test_hold_blocks_event_cues_and_debrief():
     assert not coach.held and coach.can_fire_now()
     coach.hold(5.0)
     assert coach.held and not coach.can_fire_now()
+
+
+def test_release_ends_a_demo_hold():
+    coach = AICoach(llm=lambda *a: None)
+    coach.hold(60)
+    assert coach.held
+    coach.release()
+    assert not coach.held and coach.can_fire_now()
+
+
+def test_socket_survives_a_second_demo_and_a_close():
+    server._sessions["sess-twice"] = make_session("br_01")
+    try:
+        with TestClient(app).websocket_connect("/ws/sess-twice") as ws:
+            ws.receive_text()
+            for _ in range(2):
+                ws.send_text(json.dumps({"type": "demo_request"}))
+                assert json.loads(ws.receive_text())["type"] == "demo"
+                assert json.loads(ws.receive_text())["mode"] == "demo"
+                assert json.loads(ws.receive_text())["type"] == "coach_audio_skipped"
+                ws.send_text(json.dumps({"type": "demo_close"}))
+            ws.send_text(json.dumps({"type": "ping"}))
+            assert json.loads(ws.receive_text()) == {"type": "pong"}
+        assert not server._sessions["sess-twice"].ai_coach.held
+    finally:
+        server._sessions.pop("sess-twice", None)
+
+
+def test_a_failing_demo_does_not_close_the_socket():
+    session = make_session("br_01")
+    session.demo = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+    server._sessions["sess-boom"] = session
+    try:
+        with TestClient(app).websocket_connect("/ws/sess-boom") as ws:
+            ws.receive_text()
+            ws.send_text(json.dumps({"type": "demo_request"}))
+            assert json.loads(ws.receive_text())["type"] == "demo_unavailable"
+            ws.send_text(json.dumps({"type": "ping"}))
+            assert json.loads(ws.receive_text()) == {"type": "pong"}
+    finally:
+        server._sessions.pop("sess-boom", None)
