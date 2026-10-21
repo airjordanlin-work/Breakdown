@@ -1,0 +1,10 @@
+[guard eval] 44 hand-written cases: 17 grounded replies, 27 ungrounded replies
+  false refusals (grounded reply refused): 0 of 17
+  false accepts (ungrounded reply passed):  4 of 27
+  of those, marked known_gap: 4; unexpected: 0
+  templated fallbacks that fail the guard: 0
+  - false_accept [known gap] k02: 'That elbow keeps folding every rep' ('keeps' implies a pattern the facts do not show) flags=[]
+  - false_accept [known gap] k03: 'Your form is excellent' (overall form rating is not measured) flags=[]
+  - false_accept [known gap] k04: 'You're clearly fatigued, take a rest' (fatigue is not measured) flags=[]
+  - false_accept [known gap] k05: 'Straighten it, you're bending the left elbow too much' (direction reversed; guard checks words, not meaning) flags=[]
+Covers only these cases. Not a rate for real model output.
