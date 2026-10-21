@@ -53,6 +53,7 @@ export default function Session({ sessionId, onEnd }) {
     return next;
   });
   const [demo,        setDemo]        = useState(null);
+  const demoOpen = useRef(false);   // mirrors `demo` so handleMessage can read it without re-creating
 
   // Why there is no sound, when the backend knows. null means audio is fine so far.
   const [audioNote, setAudioNote] = useState(null);
@@ -82,7 +83,9 @@ export default function Session({ sessionId, onEnd }) {
       return;
     }
     if (msg.type === "demo") {
-      setDemo(msg);
+      demoOpen.current = true;
+      // fresh object and key per request so a repeat SHOW ME remounts the overlay
+      setDemo({ ...msg, requestId: Date.now() });
       return;
     }
     if (msg.type === "demo_unavailable") {
@@ -90,6 +93,8 @@ export default function Session({ sessionId, onEnd }) {
       return;
     }
     if (msg.type === "coach_cue") {
+      // A live cue that was already on its way when SHOW ME opened would talk over the demo.
+      if (demoOpen.current && msg.mode !== "demo") return;
       setCoachCue(msg.cue);
       setLatestTurn(msg.turn_id);
       return;
@@ -129,7 +134,11 @@ export default function Session({ sessionId, onEnd }) {
   const onWsOpen  = useCallback(() => setWsReady(true), []);
   const { sendFrame, canSend, sendJson } = useWebSocket(sessionId, handleMessage, onWsOpen, playChunk);
   const requestDemo = useCallback(() => sendJson({ type: "demo_request" }), [sendJson]);
-  const closeDemo   = useCallback(() => setDemo(null), []);
+  const closeDemo   = useCallback(() => {
+    demoOpen.current = false;
+    setDemo(null);
+    sendJson({ type: "demo_end" });   // the coach may speak live cues again
+  }, [sendJson]);
 
   // Only send. The debug view now shows the live <video> element directly,
   // so we no longer re-render the whole page with a base64 image every frame.
@@ -334,7 +343,7 @@ export default function Session({ sessionId, onEnd }) {
 
           <FreezeMeter live={freezeLive} result={freezeDone} />
           {wsReady && !framing.ready && <FramingGuide problem={cameraError || framing.problem} />}
-          <DemoOverlay demo={demo} onClose={closeDemo} />
+          <DemoOverlay key={demo?.requestId} demo={demo} onClose={closeDemo} />
           <CoachCue cue={coachCue} size={CAPTION_SIZES[capSize]} />
         </div>
 

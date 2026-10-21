@@ -124,3 +124,38 @@ def test_hold_blocks_event_cues_and_debrief():
     assert not coach.held and coach.can_fire_now()
     coach.hold(5.0)
     assert coach.held and not coach.can_fire_now()
+
+
+def test_release_ends_the_hold_early():
+    async def never(*a):
+        return None
+    coach = AICoach(llm=never)
+    coach.hold(60)
+    assert coach.held and not coach.can_fire_now()
+    coach.release()
+    assert not coach.held and coach.can_fire_now()
+
+
+def test_two_demos_in_a_row_both_show_and_demo_end_releases_the_hold():
+    session = make_session("br_01")
+    server._sessions["sess-twice"] = session
+    try:
+        with TestClient(app).websocket_connect("/ws/sess-twice") as ws:
+            ws.receive_text()
+            for _ in range(2):
+                ws.send_text(json.dumps({"type": "demo_request"}))
+                assert json.loads(ws.receive_text())["type"] == "demo"
+                assert json.loads(ws.receive_text())["mode"] == "demo"
+                assert json.loads(ws.receive_text())["type"] == "coach_audio_skipped"
+                ws.send_text(json.dumps({"type": "demo_end"}))
+            ws.send_text(json.dumps({"type": "ping"}))
+            assert json.loads(ws.receive_text()) == {"type": "pong"}
+        assert not session.ai_coach.held
+    finally:
+        server._sessions.pop("sess-twice", None)
+
+
+def test_demo_falls_back_to_the_last_matched_move():
+    session = make_session(None)
+    session.engine.last_result = type("R", (), {"move_name": "br_01"})()
+    assert session.demo()[0]["move_id"] == "br_01"

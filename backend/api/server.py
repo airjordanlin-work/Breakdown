@@ -383,7 +383,8 @@ class CoachingSession:
         None when there is no single move to show (no move picked and none
         matched yet).
         """
-        move_id = self.move_id or (self.dtw_result.move_name if self.dtw_result else None)
+        move_id = self.move_id or (self.dtw_result.move_name if self.dtw_result else None) \
+            or self._last_matched_move()
         if not move_id or not (REFERENCE_DIR / f"{move_id}.npy").exists():
             return None
         meta = self._move_meta(move_id)
@@ -394,6 +395,11 @@ class CoachingSession:
         except (TypeError, ValueError):
             seconds = 3.0
         return demo_message(move_id, name, stats.focus_joint, stats.focus_fix, seconds)
+
+    def _last_matched_move(self) -> Optional[str]:
+        """Move from the last completed comparison, kept when dtw_result is cleared."""
+        last = getattr(self.engine, "last_result", None)
+        return last.move_name if last is not None else None
 
     def _move_meta(self, move_name: Optional[str]) -> dict:
         move = self.engine.get_move(move_name) if move_name else None
@@ -586,7 +592,8 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                             text = await session.ai_coach.get_debrief(
                                 ctx.get("move_name", ""), reps, ctx.get("session_totals"),
                             )
-                            if text:
+                            # A demo may have started while the debrief was being written.
+                            if text and not session.ai_coach.held:
                                 try:
                                     await send_coach_cue(websocket, session.voice, text, mode="debrief")
                                 except Exception as e:
@@ -614,7 +621,8 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                                 previous_result = ctx.get("previous_result"),
                                 clean_streak = ctx.get("clean_streak", 0),
                             )
-                            if cue:
+                            # A demo may have started while the cue was being written.
+                            if cue and not session.ai_coach.held:
                                 # caption + Kokoro audio, streamed to the client
                                 try:
                                     await send_coach_cue(websocket, session.voice, cue)
@@ -626,7 +634,11 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
             elif msg.get("type") == "demo_request":
                 # "Show me": play the move slowly, say what to watch, and keep
                 # live cues quiet while the dancer is watching.
-                demo = session.demo()
+                try:
+                    demo = session.demo()
+                except Exception as e:
+                    print(f"Demo request failed: {e}")
+                    demo = None
                 if demo is None:
                     await websocket.send_text(json.dumps(
                         {"type": "demo_unavailable", "reason": "Pick a move first"}))
@@ -637,12 +649,18 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
 
                 async def _fire_demo(line=line):
                     async with session.speak_lock:
+                        if not session.ai_coach.held:
+                            return  # demo closed before its line could be spoken
                         try:
                             await send_coach_cue(websocket, session.voice, line, mode="demo")
                         except Exception:
                             pass  # socket closed mid-send
 
                 _track(session, asyncio.create_task(_fire_demo()))
+
+            elif msg.get("type") == "demo_end":
+                # The dancer closed the demo (or it finished): live cues resume.
+                session.ai_coach.release()
 
             elif msg.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
