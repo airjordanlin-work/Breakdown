@@ -1,39 +1,24 @@
-// Draws a pose from the move preview as either a plain skeleton or a
-// character figure.
+// Draws a pose from the move preview as either a plain skeleton or a flat
+// silhouette figure.
 //
 // Joint order matches backend/app/move_catalog.py PREVIEW_JOINTS + neck:
 //   0 nose, 1 L shoulder, 2 R shoulder, 3 L elbow, 4 R elbow, 5 L wrist,
 //   6 R wrist, 7 L hip, 8 R hip, 9 L knee, 10 R knee, 11 L ankle,
 //   12 R ankle, 13 neck.   Each joint is [x, y, depth].
 //
-// The figure is built from named body parts (PARTS below). Each part has a
-// look; to swap in mascot artwork later, replace a part's draw function
-// with one that draws an image rotated along the same two joints.
+// The silhouette is one flat color with no face or clothes, so it reads as
+// clean and neutral. Limbs taper from joint to joint, the torso narrows toward
+// the waist, and the limbs on the far side of the body are a shade darker so
+// overlapping limbs still read. To swap in artwork later, replace the shape
+// drawing with images rotated along the same joint pairs.
 
 const J = { NOSE: 0, LSH: 1, RSH: 2, LEL: 3, REL: 4, LWR: 5, RWR: 6,
             LHIP: 7, RHIP: 8, LKN: 9, RKN: 10, LAN: 11, RAN: 12, NECK: 13 };
 
 export const LOOK = {
-  skin:   "#eee9e0",
-  hoodie: "#ff2d2d",
-  pants:  "#2e2e36",
-  shoes:  "#f7f5f0",
-  soles:  "#16161a",
-  beanie: "#16161a",
-  outline:"#060608",
+  body: "#eee9e0",
+  far:  "#a9a59d",
 };
-
-// Thickness in hip-width units (the data's unit of length).
-const PARTS = [
-  { name: "L thigh",   a: J.LHIP, b: J.LKN, w: 0.62, color: "pants" },
-  { name: "R thigh",   a: J.RHIP, b: J.RKN, w: 0.62, color: "pants" },
-  { name: "L shin",    a: J.LKN,  b: J.LAN, w: 0.48, color: "pants" },
-  { name: "R shin",    a: J.RKN,  b: J.RAN, w: 0.48, color: "pants" },
-  { name: "L upper arm", a: J.LSH, b: J.LEL, w: 0.44, color: "hoodie" },
-  { name: "R upper arm", a: J.RSH, b: J.REL, w: 0.44, color: "hoodie" },
-  { name: "L forearm", a: J.LEL,  b: J.LWR, w: 0.38, color: "hoodie" },
-  { name: "R forearm", a: J.REL,  b: J.RWR, w: 0.38, color: "hoodie" },
-];
 
 export function lerpPose(a, b, t) {
   return a.map((p, i) => p.map((v, k) => v + (b[i][k] - v) * t));
@@ -55,99 +40,94 @@ export function drawSkeleton(ctx, pose, bones, map, color, width, alpha) {
   ctx.globalAlpha = 1;
 }
 
-// Darken a hex color: far limbs are drawn slightly darker to read as behind.
-function shade(hex, amount) {
-  const n = parseInt(hex.slice(1), 16);
-  const f = (c) => Math.max(0, Math.round(c * (1 - amount)));
-  const r = f(n >> 16), g = f((n >> 8) & 255), b = f(n & 255);
-  return `rgb(${r},${g},${b})`;
-}
-
-function capsule(ctx, p, q, width, color) {
-  ctx.strokeStyle = LOOK.outline;
-  ctx.lineCap = "round";
-  ctx.lineWidth = width + 3;
-  ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = width;
-  ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke();
-}
-
-function dot(ctx, p, r, color) {
-  ctx.fillStyle = LOOK.outline;
-  ctx.beginPath(); ctx.arc(p[0], p[1], r + 1.5, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = color;
-  ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, Math.PI * 2); ctx.fill();
-}
-
-function shoe(ctx, knee, ankle, unit, color) {
-  // Sneaker: a rounded block past the ankle, perpendicular-ish to the shin.
-  const dx = ankle[0] - knee[0], dy = ankle[1] - knee[1];
+// A limb segment that tapers from radius r1 at p to r2 at q. With startCap
+// false the p end is flat, for ends that tuck under the torso.
+function limb(ctx, p, q, r1, r2, color, startCap = true) {
+  const dx = q[0] - p[0], dy = q[1] - p[1];
   const len = Math.hypot(dx, dy) || 1;
-  const ux = dx / len, uy = dy / len;
-  const cx = ankle[0] + ux * unit * 0.12, cy = ankle[1] + uy * unit * 0.12;
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate(Math.atan2(uy, ux) - Math.PI / 2);
-  const w = unit * 0.62, h = unit * 0.3;
-  ctx.fillStyle = LOOK.outline;
-  ctx.beginPath(); ctx.roundRect(-w / 2 - 1.5, -h / 2 - 1.5, w + 3, h + 3, h / 2); ctx.fill();
+  const nx = -dy / len, ny = dx / len;
   ctx.fillStyle = color;
-  ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, h / 2); ctx.fill();
-  ctx.fillStyle = LOOK.soles;
-  ctx.fillRect(-w / 2 + h / 3, h / 2 - h * 0.28, w - (2 * h) / 3, h * 0.28);
-  ctx.restore();
+  // Three separate fills: in one path the arcs and the trapezoid can wind in
+  // opposite directions and leave hairline gaps where they overlap.
+  if (startCap) { ctx.beginPath(); ctx.arc(p[0], p[1], r1, 0, Math.PI * 2); ctx.fill(); }
+  ctx.beginPath(); ctx.arc(q[0], q[1], r2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(p[0] + nx * r1, p[1] + ny * r1);
+  ctx.lineTo(q[0] + nx * r2, q[1] + ny * r2);
+  ctx.lineTo(q[0] - nx * r2, q[1] - ny * r2);
+  ctx.lineTo(p[0] - nx * r1, p[1] - ny * r1);
+  ctx.closePath();
+  ctx.fill();
+}
+
+// Rounded polygon: corners are eased with quadratic curves.
+function roundedPoly(ctx, pts, radius) {
+  const n = pts.length;
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const prev = pts[(i + n - 1) % n], cur = pts[i], next = pts[(i + 1) % n];
+    const d1 = Math.hypot(cur[0] - prev[0], cur[1] - prev[1]) || 1;
+    const d2 = Math.hypot(next[0] - cur[0], next[1] - cur[1]) || 1;
+    const r1 = Math.min(radius, d1 / 2), r2 = Math.min(radius, d2 / 2);
+    const a = [cur[0] + (prev[0] - cur[0]) * (r1 / d1), cur[1] + (prev[1] - cur[1]) * (r1 / d1)];
+    const b = [cur[0] + (next[0] - cur[0]) * (r2 / d2), cur[1] + (next[1] - cur[1]) * (r2 / d2)];
+    if (i === 0) ctx.moveTo(a[0], a[1]); else ctx.lineTo(a[0], a[1]);
+    ctx.quadraticCurveTo(cur[0], cur[1], b[0], b[1]);
+  }
+  ctx.closePath();
 }
 
 export function drawFigure(ctx, pose, map, unit) {
   const P = pose.map(map);
   const depth = (i) => pose[i][2];
-  const nearSide = (depth(J.LSH) + depth(J.LHIP)) >= (depth(J.RSH) + depth(J.RHIP)) ? "L" : "R";
-  const isFar = (name) => !name.startsWith(nearSide);
+  const nearIsLeft = (depth(J.LSH) + depth(J.LHIP)) >= (depth(J.RSH) + depth(J.RHIP));
 
-  // Far-side limbs first, then torso and head, then near-side limbs.
-  const far = PARTS.filter((p) => isFar(p.name));
-  const near = PARTS.filter((p) => !isFar(p.name));
-
-  const drawPart = (part, farSide) => {
-    const base = LOOK[part.color];
-    capsule(ctx, P[part.a], P[part.b], part.w * unit, farSide ? shade(base, 0.35) : base);
+  // Radii are in hip-width units (the data's unit of length).
+  const leg = (left, color) => {
+    const [hip, kn, an] = left ? [J.LHIP, J.LKN, J.LAN] : [J.RHIP, J.RKN, J.RAN];
+    limb(ctx, P[hip], P[kn], unit * 0.31, unit * 0.24, color, false);   // hip end tucks under the torso
+    limb(ctx, P[kn], P[an], unit * 0.24, unit * 0.15, color);
+    // foot: a short taper pointing on from the knee-to-ankle direction
+    const dx = P[an][0] - P[kn][0], dy = P[an][1] - P[kn][1];
+    const len = Math.hypot(dx, dy) || 1;
+    const tip = [P[an][0] + (dx / len) * unit * 0.28, P[an][1] + (dy / len) * unit * 0.28];
+    limb(ctx, P[an], tip, unit * 0.15, unit * 0.11, color);
+  };
+  const arm = (left, color) => {
+    const [sh, el, wr] = left ? [J.LSH, J.LEL, J.LWR] : [J.RSH, J.REL, J.RWR];
+    limb(ctx, P[sh], P[el], unit * 0.22, unit * 0.17, color);
+    limb(ctx, P[el], P[wr], unit * 0.17, unit * 0.12, color);
   };
 
-  far.forEach((p) => drawPart(p, true));
-  shoe(ctx, P[nearSide === "L" ? J.RKN : J.LKN], P[nearSide === "L" ? J.RAN : J.LAN], unit, shade(LOOK.shoes, 0.25));
-  dot(ctx, P[nearSide === "L" ? J.RWR : J.LWR], unit * 0.2, shade(LOOK.skin, 0.25));
+  // Far side first, then near leg, then torso and head, then the near arm.
+  const farLeft = !nearIsLeft;
+  leg(farLeft, LOOK.far);
+  arm(farLeft, LOOK.far);
+  leg(nearIsLeft, LOOK.body);
 
-  // Torso: hoodie body from shoulders to hips.
-  const torso = [P[J.LSH], P[J.RSH], P[J.RHIP], P[J.LHIP]];
+  // Torso: wider at the shoulders, narrower at the waist.
+  const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+  const torso = [
+    mix(P[J.LSH], P[J.RSH], -0.08), mix(P[J.LSH], P[J.RSH], 1.08),
+    mix(P[J.LHIP], P[J.RHIP], 1.0), mix(P[J.LHIP], P[J.RHIP], 0.0),
+  ];
+  const pad = unit * 0.13;
+  ctx.fillStyle = LOOK.body;
+  ctx.strokeStyle = LOOK.body;
   ctx.lineJoin = "round";
-  ctx.fillStyle = LOOK.hoodie;
-  ctx.strokeStyle = LOOK.outline;
-  ctx.lineWidth = unit * 0.34 + 3;
-  ctx.beginPath();
-  torso.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
-  ctx.closePath();
-  ctx.stroke();
-  ctx.strokeStyle = LOOK.hoodie;
-  ctx.lineWidth = unit * 0.34;
+  ctx.lineWidth = pad * 2;
+  roundedPoly(ctx, torso, unit * 0.3);
   ctx.stroke();
   ctx.fill();
-  // waistband
-  capsule(ctx, P[J.LHIP], P[J.RHIP], unit * 0.34, shade(LOOK.hoodie, 0.25));
 
-  // Neck and head, with a beanie on the side away from the neck.
-  capsule(ctx, P[J.NECK], P[J.NOSE], unit * 0.3, LOOK.skin);
+  // Neck and head.
   const head = P[J.NOSE], neck = P[J.NECK];
-  const r = unit * 0.5;
-  dot(ctx, head, r, LOOK.skin);
+  limb(ctx, neck, head, unit * 0.15, unit * 0.14, LOOK.body);
   const up = Math.atan2(head[1] - neck[1], head[0] - neck[0]);
-  ctx.fillStyle = LOOK.beanie;
+  ctx.fillStyle = LOOK.body;
   ctx.beginPath();
-  ctx.arc(head[0], head[1], r + 1, up - Math.PI / 2.1, up + Math.PI / 2.1);
-  ctx.closePath();
+  ctx.arc(head[0] + Math.cos(up) * unit * 0.1, head[1] + Math.sin(up) * unit * 0.1, unit * 0.42, 0, Math.PI * 2);
   ctx.fill();
 
-  near.forEach((p) => drawPart(p, false));
-  shoe(ctx, P[nearSide === "L" ? J.LKN : J.RKN], P[nearSide === "L" ? J.LAN : J.RAN], unit, LOOK.shoes);
-  dot(ctx, P[nearSide === "L" ? J.LWR : J.RWR], unit * 0.2, LOOK.skin);
+  arm(nearIsLeft, LOOK.body);
 }
