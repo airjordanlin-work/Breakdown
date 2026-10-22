@@ -643,20 +643,10 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                     await websocket.send_text(json.dumps(
                         {"type": "demo_unavailable", "reason": "Pick a move first"}))
                     continue
-                demo_msg, line, quiet_s = demo
+                # The demo is silent: the overlay shows the move and the joint to watch.
+                demo_msg, _line, quiet_s = demo
                 session.ai_coach.hold(quiet_s)
                 await websocket.send_text(json.dumps(demo_msg))
-
-                async def _fire_demo(line=line):
-                    async with session.speak_lock:
-                        if not session.ai_coach.held:
-                            return  # demo closed before its line could be spoken
-                        try:
-                            await send_coach_cue(websocket, session.voice, line, mode="demo")
-                        except Exception:
-                            pass  # socket closed mid-send
-
-                _track(session, asyncio.create_task(_fire_demo()))
 
             elif msg.get("type") == "demo_end":
                 # The dancer closed the demo (or it finished): live cues resume.

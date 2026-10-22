@@ -90,17 +90,17 @@ def make_session(move_id):
     return s
 
 
-def test_socket_demo_request_sends_demo_then_spoken_line():
+def test_socket_demo_request_sends_demo_and_says_nothing():
     server._sessions["sess-demo"] = make_session("br_01")
     try:
         with TestClient(app).websocket_connect("/ws/sess-demo") as ws:
             ws.receive_text()   # voice status
             ws.send_text(json.dumps({"type": "demo_request"}))
             demo = json.loads(ws.receive_text())
-            cue = json.loads(ws.receive_text())
             assert demo["type"] == "demo" and demo["move_id"] == "br_01"
-            assert cue["type"] == "coach_cue" and cue["mode"] == "demo"
-            assert cue["cue"].startswith("Here's BR 01 at half speed.")
+            # no spoken line: the next message is the answer to this ping
+            ws.send_text(json.dumps({"type": "ping"}))
+            assert json.loads(ws.receive_text()) == {"type": "pong"}
         assert not server._sessions["sess-demo"].ai_coach.should_fire(
             tracked=True, moving=True, fill_ratio=1.0, has_score=True)
     finally:
@@ -145,8 +145,6 @@ def test_two_demos_in_a_row_both_show_and_demo_end_releases_the_hold():
             for _ in range(2):
                 ws.send_text(json.dumps({"type": "demo_request"}))
                 assert json.loads(ws.receive_text())["type"] == "demo"
-                assert json.loads(ws.receive_text())["mode"] == "demo"
-                assert json.loads(ws.receive_text())["type"] == "coach_audio_skipped"
                 ws.send_text(json.dumps({"type": "demo_end"}))
             ws.send_text(json.dumps({"type": "ping"}))
             assert json.loads(ws.receive_text()) == {"type": "pong"}
