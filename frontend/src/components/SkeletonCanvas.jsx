@@ -163,7 +163,7 @@ function drawBufferBar(ctx, W, H, fillRatio) {
 
 export default function SkeletonCanvas({
   landmarks, visibility, ghostBones, ghostAnchor,
-  aligned, fillRatio, moveName, width=640, height=480, mirror=false,
+  aligned, fillRatio, moveName, width=640, height=480, mirror=false, clear=false,
 }) {
   const canvasRef    = useRef(null);
   const containerRef = useRef(null);
@@ -190,8 +190,12 @@ export default function SkeletonCanvas({
     const W = canvas.width, H = canvas.height;
     if (!W || !H) return;
 
-    ctx.fillStyle = "#060608"; ctx.fillRect(0,0,W,H);
-    drawGraffitiBackground(ctx, W, H);
+    if (clear) {
+      ctx.clearRect(0,0,W,H);   // a camera picture sits underneath
+    } else {
+      ctx.fillStyle = "#060608"; ctx.fillRect(0,0,W,H);
+      drawGraffitiBackground(ctx, W, H);
+    }
 
     const hasBody = landmarks && landmarks.length > 0;
     if (!hasBody) {
@@ -207,7 +211,7 @@ export default function SkeletonCanvas({
 
     drawMoveName(ctx, W, H, moveName);
     drawBufferBar(ctx, W, H, fillRatio);
-  }, [landmarks, visibility, ghostBones, ghostAnchor, aligned, fillRatio, moveName, mirror]);
+  }, [landmarks, visibility, ghostBones, ghostAnchor, aligned, fillRatio, moveName, mirror, clear]);
 
   return (
     <div ref={containerRef} style={{ width:"100%", height:"100%", position:"relative" }}>

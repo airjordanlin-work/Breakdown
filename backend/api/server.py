@@ -46,6 +46,28 @@ from app.move_catalog import load_catalog, preview as move_preview
 
 # Every route needs the shared ACCESS_TOKEN when one is set.
 # The interactive docs are off so they cannot be used to browse the API.
+# The camera picture for a viewer is small and sent a few times a second. It is
+# forwarded as it arrives and never stored.
+PREVIEW_INTERVAL_S = 0.2
+PREVIEW_WIDTH = 320
+PREVIEW_QUALITY = 50
+
+
+def make_preview(b64: str) -> Optional[str]:
+    """Shrink a phone camera frame to a small JPEG (base64), or None if it cannot be decoded."""
+    try:
+        img = cv2.imdecode(np.frombuffer(base64.b64decode(b64), np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            return None
+        h, w = img.shape[:2]
+        if w > PREVIEW_WIDTH:
+            img = cv2.resize(img, (PREVIEW_WIDTH, max(1, round(h * PREVIEW_WIDTH / w))), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, PREVIEW_QUALITY])
+        return base64.b64encode(buf.tobytes()).decode("ascii") if ok else None
+    except Exception:
+        return None
+
+
 # Pages poll these every few seconds. Drop their successful requests from the
 # uvicorn access log so the terminal (and the machine) is not flooded.
 QUIET_POLL_PATHS = ("/imu/status", "/sessions/latest")
@@ -635,6 +657,8 @@ async def viewer_endpoint(websocket: WebSocket, session_id: str):
                 continue  # a viewer only pings; ignore anything else
             if isinstance(msg, dict) and msg.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
+            elif isinstance(msg, dict) and msg.get("type") == "video":
+                session.viewers.want_video(websocket, bool(msg.get("on")))
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
@@ -679,6 +703,14 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
 
                 # send frame data to frontend immediately
                 await _send_text(websocket, json.dumps(payload), viewers)
+
+                if viewers is not None and viewers.video_count:
+                    now = time.monotonic()
+                    if now - getattr(session, "last_preview_at", 0.0) >= PREVIEW_INTERVAL_S:
+                        session.last_preview_at = now
+                        preview = await loop.run_in_executor(_executor, make_preview, msg["data"])
+                        if preview:
+                            await viewers.broadcast_video(json.dumps({"type": "video", "data": preview}))
 
                 # fire AI coach — non-blocking.
                 # A finished freeze gets feedback right away (skips the cooldown);
