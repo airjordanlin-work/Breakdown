@@ -12,6 +12,7 @@ import { INITIAL_FRAMING, nextFraming } from "../framing";
 import "../styles/session.css";
 import FreezeMeter      from "../components/FreezeMeter";
 import DemoOverlay      from "../components/DemoOverlay";
+import ResultCard       from "../components/ResultCard";
 
 const CAPTION_SIZE_KEY = "breakdown_caption_size";
 
@@ -53,6 +54,12 @@ export default function Session({ sessionId, onEnd }) {
     return next;
   });
   const [demo,        setDemo]        = useState(null);
+  // Result card for the attempt just finished; it clears when the next rep is scored.
+  const [summary, setSummary] = useState(null);
+  const repsNow = useRef(0);
+  useEffect(() => {
+    if (summary && (stats?.reps ?? 0) > summary.at) setSummary(null);
+  }, [stats, summary]);
   const demoOpen = useRef(false);   // mirrors `demo` so handleMessage can read it without re-creating
 
   // Why there is no sound, when the backend knows. null means audio is fine so far.
@@ -83,6 +90,10 @@ export default function Session({ sessionId, onEnd }) {
   const handleMessage = useCallback((msg) => {
     if (msg.type === "voice_status") {
       setAudioNote(msg.available ? null : `Coach voice is off: ${msg.reason}`);
+      return;
+    }
+    if (msg.type === "rep_summary") {
+      setSummary({ ...msg, at: repsNow.current });
       return;
     }
     if (msg.type === "viewers") {
@@ -128,7 +139,10 @@ export default function Session({ sessionId, onEnd }) {
     if (msg.fill_ratio  !== undefined)  setFillRatio(msg.fill_ratio);
     if (msg.move_name)                  setMoveName(msg.move_name);
     if (msg.guidance    !== undefined)  setGuidance(msg.guidance);
-    if (msg.stats)                      setStats(msg.stats);
+    if (msg.stats) {
+      setStats(msg.stats);
+      repsNow.current = msg.stats.reps;
+    }
     if (msg.score_result)               setScoreResult(msg.score_result);
   }, [setLatestTurn]);
 
@@ -385,6 +399,7 @@ export default function Session({ sessionId, onEnd }) {
 
           <FreezeMeter live={freezeLive} result={freezeDone} />
           {wsReady && !framing.ready && <FramingGuide problem={cameraError || framing.problem} />}
+          <ResultCard summary={summary} onClose={() => setSummary(null)} />
           <DemoOverlay key={demo?.requestId} demo={demo} onClose={closeDemo} />
           <CoachCue cue={coachCue} size={CAPTION_SIZES[capSize]} />
         </div>

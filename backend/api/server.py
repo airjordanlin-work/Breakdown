@@ -39,7 +39,7 @@ from app.imu_protocol import PacketError, unpack_forwarded
 from app.imu_store import ImuStore
 from app.freeze_monitor import FreezeMonitor
 from app.activity import is_moving
-from app.attempts import AttemptTracker
+from app.attempts import AttemptTracker, attempt_summary
 from app.move_catalog import load_catalog, preview as move_preview
 
 # Every route needs the shared ACCESS_TOKEN when one is set.
@@ -164,6 +164,7 @@ def _score_payload(result) -> dict:
     return {
         "points":  round(result.points_this_attempt),
         "clean":   all(r.tier != "Miss" for r in result.results),
+        "moments": list(getattr(result, "moments", [])),
         "results": [
             {
                 "joint":  r.joint_name.replace("_", " "),
@@ -665,6 +666,9 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                     # The dancer is watching a demo; the debrief would talk over it.
                     continue
                 if debrief_reps:
+                    # The result card first (shows even with no API key), then the spoken debrief.
+                    await _send_text(websocket, json.dumps(
+                        attempt_summary(coach_ctx.get("move_name", ""), debrief_reps)), viewers)
                     # The dancer just stopped: one debrief for that attempt.
                     async def _fire_debrief(ctx=coach_ctx, reps=debrief_reps):
                         async with session.speak_lock:
