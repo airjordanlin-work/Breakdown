@@ -206,6 +206,7 @@ export default function Session({ sessionId, onEnd }) {
   const sendRef = useRef(null);
   const onWsOpen  = useCallback(() => {
     setWsReady(true);
+    setVoiceState("idle");   // a new socket starts with no turn running on the server
     sendRef.current?.({ type: "live_cues", on: liveCuesRef.current });
   }, []);
   const { sendFrame, canSend, sendJson } = useWebSocket(sessionId, handleMessage, onWsOpen, playChunk, frameBuf.add);
