@@ -179,6 +179,20 @@ The app runs without either. Coaching and voice just switch off.
 
 Coach audio plays in the browser, not on the server. Browsers block sound until you tap the page, so if a session shows TAP FOR SOUND, tap it once.
 
+### Docker (backend only, PROPOSED: written but not yet built or run)
+
+The `Dockerfile` at the repo root builds the backend on Python 3.12. It was updated without a Docker daemon available, so the first build on your machine is the real test. From the repo root:
+
+```bash
+docker build -t breakdown-backend .
+docker run --rm -p 8000:8000 --env-file .env \
+  -v "$PWD/backend/kokoro-v1.0.onnx:/app/backend/kokoro-v1.0.onnx:ro" \
+  -v "$PWD/backend/voices-v1.0.bin:/app/backend/voices-v1.0.bin:ro" \
+  breakdown-backend
+```
+
+Your `.env` and the Kokoro files are passed in at run time and are not part of the image. Without the Kokoro files the coach shows captions and has no voice. The frontend is not in the image; run it with `npm run dev` as above.
+
 ### 4. Wearable sensors (optional)
 
 Flash the firmware (see [`firmware/README.md`](firmware/README.md)), power the board, then in a new terminal:
