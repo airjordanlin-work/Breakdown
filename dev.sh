@@ -92,12 +92,22 @@ if $TUNNEL; then
     if [[ -z "$url" ]]; then
       echo "Tunnel URL did not appear. See $TUNNEL_LOG"
     else
+      # A new hostname takes a little while to resolve. Printing it early gives
+      # "server can't be found" on the phone, so wait until it answers here.
+      echo "Waiting for $url to come online..."
+      code=000
+      for _ in $(seq 1 45); do
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url" || true)
+        [[ "$code" != "000" && "$code" != "530" && "$code" != "502" ]] && break
+        sleep 2
+      done
+      [[ "$code" == "000" || "$code" == "530" || "$code" == "502" ]] && echo "Tunnel still not answering; try the link anyway, or restart."
       link="$url/?token=$TOKEN"
       echo "Phone link (contains your token, do not share it):"
       echo "$link"
       if command -v qrencode >/dev/null; then
         qrencode -t ANSIUTF8 "$link"
-        echo "Scan the QR code with the iPhone camera."
+        echo "Scan the QR code with the iPhone camera. If Safari says the server can't be found, wait 30 seconds and reload."
       else
         echo "For a QR code, run: brew install qrencode  (then restart ./dev.sh --tunnel)"
       fi
