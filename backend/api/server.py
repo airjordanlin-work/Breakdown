@@ -8,6 +8,7 @@ import asyncio
 import base64
 import dataclasses
 import json
+import logging
 import threading
 import time
 import uuid
@@ -45,6 +46,23 @@ from app.move_catalog import load_catalog, preview as move_preview
 
 # Every route needs the shared ACCESS_TOKEN when one is set.
 # The interactive docs are off so they cannot be used to browse the API.
+# Pages poll these every few seconds. Drop their successful requests from the
+# uvicorn access log so the terminal (and the machine) is not flooded.
+QUIET_POLL_PATHS = ("/imu/status", "/sessions/latest")
+
+
+class _QuietPollFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 5:
+            path, status = str(args[2]).split("?", 1)[0], args[4]
+            if path in QUIET_POLL_PATHS and status == 200:
+                return False
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietPollFilter())
+
 app = FastAPI(
     title="Breakdance Coach API",
     dependencies=[Depends(require_token)],

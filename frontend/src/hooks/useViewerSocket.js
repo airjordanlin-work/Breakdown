@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { apiFetch, wsUrl } from "../api";
 
-const RETRY_MS = 2000;
-const FOLLOW_MS = 3000;
+const RETRY_MS = 5000;
+const FOLLOW_MS = 5000;
 
 // Follows the phone's newest session as a read-only viewer (a TV or laptop).
 // Looks for the latest session every couple of seconds, connects to its

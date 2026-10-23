@@ -36,7 +36,7 @@ function useSensorStatus() {
         .then((s) => alive && setConnected(Boolean(s.connected)))
         .catch(() => alive && setConnected(false));
     check();
-    const id = setInterval(check, 3000);
+    const id = setInterval(check, 10000);
     return () => { alive = false; clearInterval(id); };
   }, []);
   return connected;
