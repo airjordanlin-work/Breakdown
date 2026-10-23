@@ -1,0 +1,41 @@
+/* Second-screen viewer: sized to be read from a few meters away. */
+.viewer-root {
+  position: fixed; inset: 0; display: flex; flex-direction: column;
+  background: #060608; color: #eee9e0; font-family: "Anton", sans-serif;
+}
+.viewer-top {
+  display: flex; align-items: center; gap: 24px; padding: 14px 28px;
+  border-bottom: 1px solid #1a1a1f; letter-spacing: 0.25em; font-size: 18px;
+}
+.viewer-title { color: #888; }
+.viewer-status { font-size: 16px; }
+.viewer-status.live { color: #4cff4c; }
+.viewer-status.searching { color: #ffc14c; }
+.viewer-sound {
+  margin-left: auto; background: #1a0606; border: 1px solid #ff2d2d; color: #ff2d2d;
+  padding: 8px 20px; font-family: inherit; font-size: 14px; letter-spacing: 0.15em; cursor: pointer;
+}
+.viewer-main { flex: 1; display: flex; min-height: 0; }
+.viewer-stage { flex: 1; position: relative; min-width: 0; }
+.viewer-side {
+  width: min(30vw, 420px); padding: 28px; border-left: 1px solid #1a1a1f;
+  display: flex; flex-direction: column; justify-content: center; gap: 8px;
+}
+.viewer-label { font-size: 16px; letter-spacing: 0.25em; color: #666; margin-top: 18px; }
+.viewer-big { font-size: clamp(64px, 9vw, 140px); line-height: 1; }
+.viewer-big span, .viewer-mid span { font-size: 0.25em; color: #666; margin-left: 10px; }
+.viewer-mid { font-size: clamp(40px, 5vw, 80px); line-height: 1; }
+.viewer-focus { font-size: clamp(26px, 3.2vw, 52px); line-height: 1.15; letter-spacing: 0.05em; }
+.viewer-focus.fix { color: #ffc14c; }
+.viewer-focus.ok  { color: #4cff4c; }
+.viewer-cue {
+  min-height: 12vh; display: flex; align-items: center; justify-content: center;
+  padding: 0 40px; text-align: center; letter-spacing: 0.06em;
+  font-size: clamp(32px, 5vw, 84px); line-height: 1.1;
+  border-top: 1px solid #1a1a1f;
+}
+.viewer-note { position: absolute; left: 28px; bottom: 12px; font-size: 14px; color: #888; }
+@media (max-width: 800px) {
+  .viewer-main { flex-direction: column; }
+  .viewer-side { width: auto; border-left: 0; border-top: 1px solid #1a1a1f; }
+}

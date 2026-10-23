@@ -125,3 +125,18 @@ def test_phone_is_told_when_the_last_viewer_leaves():
 def test_viewer_for_an_unknown_session_is_refused():
     with TestClient(app).websocket_connect("/ws/nope/view") as tv:
         assert json.loads(tv.receive_text()) == {"error": "session not found"}
+
+
+def test_latest_session_is_the_newest_open_one():
+    old, new, closed = make_session(), make_session(), make_session()
+    closed.closed = True
+    server._sessions.clear()
+    server._sessions.update({"a": old, "b": new, "c": closed})
+    try:
+        assert TestClient(app).get("/sessions/latest").json() == {"session_id": "b"}
+        server._sessions.pop("b")
+        assert TestClient(app).get("/sessions/latest").json() == {"session_id": "a"}
+        server._sessions.clear()
+        assert TestClient(app).get("/sessions/latest").json() == {"session_id": None}
+    finally:
+        server._sessions.clear()

@@ -550,6 +550,15 @@ async def end_session(session_id: str):
     return {"status": "closed"}
 
 
+@app.get("/sessions/latest")
+async def latest_session():
+    """The newest open session, so a second screen (/view) can find the phone's session."""
+    for sid in reversed(list(_sessions)):
+        if not getattr(_sessions[sid], "closed", False):
+            return {"session_id": sid}
+    return {"session_id": None}
+
+
 @app.get("/imu/status")
 async def imu_status():
     return _imu_store.status()
