@@ -64,3 +64,41 @@ def test_feature_fix_has_no_checkpoint():
 def test_clean_attempt_has_no_fix():
     card = attempt_summary("Cross step", [rep(("left knee", "Perfect", "bend"))])
     assert card["fix"] is None and card["went_well"] == ["left knee"]
+
+
+def test_moments_carry_capture_time_and_joint_position_when_frames_are_given():
+    from app.pose_estimator import PoseFrame
+
+    move = next(m for m in load_reference_library(REF_DIR) if m.name == "br_01")
+    seq = list(move.sequence.reshape(-1, 33, 3))
+    window = [f.copy() for f in seq]
+    for f in window:
+        f[15] = f[11]
+    frames = [
+        PoseFrame(landmarks=f, visibility=f[:, 0] * 0 + 1, raw_landmarks=f + 0.5, captured_at=100.0 + i / 10)
+        for i, f in enumerate(window)
+    ]
+    result = Scorer(REF_DIR).score_rep(compare_to_move(move.sequence, move), window, frames)
+    left = [m for m in result.moments if m["joint"] == "left elbow"]
+    assert left and all(100.0 <= m["t"] <= 106.0 and "x" in m and "y" in m for m in left)
+    # the elbow is landmark 13: its position comes from that landmark, not the wrist or shoulder
+    assert any(abs(m["x"] - (window[0][13][0] + 0.5)) < 1.0 for m in left)
+
+
+def test_summary_locates_the_newest_miss_for_the_replay():
+    def at(checkpoint, t):
+        m = moment(checkpoint, "left elbow")
+        m.update({"t": t, "x": 0.4, "y": 0.5})
+        return m
+
+    reps = [
+        rep(("left elbow", "Miss", "straighten"), moments=[at(2, 10.0)]),
+        rep(("left elbow", "Miss", "straighten"), moments=[at(2, 12.5)]),
+    ]
+    fix = attempt_summary("Cross step", reps)["fix"]
+    assert fix["checkpoint"] == 2 and fix["t"] == 12.5 and (fix["x"], fix["y"]) == (0.4, 0.5)
+
+
+def test_summary_without_capture_times_has_no_replay_position():
+    reps = [rep(("left elbow", "Miss", "straighten"), moments=[moment(2, "left elbow")])]
+    assert "t" not in attempt_summary("Cross step", reps)["fix"]

@@ -1,7 +1,7 @@
 // What the coach found in the attempt you just finished: how many reps were
 // clean, what landed every rep, and the one thing to fix with where in the
 // move it went wrong. Built by the backend from the scorer's results.
-export default function ResultCard({ summary, onClose, big = false }) {
+export default function ResultCard({ summary, onClose, onReplay, big = false }) {
   if (!summary) return null;
   const { move, reps, clean_reps: clean, went_well: wentWell = [], fix } = summary;
   const size = (n) => (big ? n * 1.8 : n);
@@ -45,6 +45,16 @@ export default function ResultCard({ summary, onClose, big = false }) {
           <div style={{ ...text, fontSize: size(26), color: "#4cff4c" }}>ALL JOINTS ON POINT</div>
         )}
       </div>
+
+      {onReplay && (
+        <button type="button" onClick={onReplay} style={{
+          alignSelf: "flex-start", background: "transparent",
+          border: "1px solid #ffc14c", color: "#ffc14c", padding: "8px 22px",
+          fontFamily: "'Anton',sans-serif", fontSize: 12, letterSpacing: "0.15em", cursor: "pointer",
+        }}>
+          REPLAY THE MISTAKE
+        </button>
+      )}
 
       {onClose && (
         <button type="button" onClick={onClose} style={{

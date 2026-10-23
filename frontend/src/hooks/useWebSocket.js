@@ -6,11 +6,14 @@ import { wsUrl } from "../api";
 const STALE_MS = 1000;
 
 // onBinary receives binary frames (coach audio chunks) as ArrayBuffers.
-export function useWebSocket(sessionId, onMessage, onOpen, onBinary) {
+// onFrameSent(b64, t) runs for each camera frame actually sent, with the
+// capture time (seconds) the backend will report back for that frame.
+export function useWebSocket(sessionId, onMessage, onOpen, onBinary, onFrameSent) {
   const ws        = useRef(null);
   const onOpenRef = useRef(onOpen);
   const onMsgRef  = useRef(onMessage);
   const onBinRef  = useRef(onBinary);
+  const onSentRef = useRef(onFrameSent);
 
   // Backpressure state: is a frame currently being processed by the backend?
   const inFlight  = useRef(false);
@@ -19,6 +22,7 @@ export function useWebSocket(sessionId, onMessage, onOpen, onBinary) {
   useEffect(() => { onOpenRef.current = onOpen; }, [onOpen]);
   useEffect(() => { onMsgRef.current  = onMessage; }, [onMessage]);
   useEffect(() => { onBinRef.current  = onBinary; }, [onBinary]);
+  useEffect(() => { onSentRef.current = onFrameSent; }, [onFrameSent]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -56,7 +60,9 @@ export function useWebSocket(sessionId, onMessage, onOpen, onBinary) {
     sentAt.current   = performance.now();
     // t = capture time in seconds on the laptop clock. The IMU bridge stamps
     // packets with the same clock, so the backend can line the two up.
-    ws.current.send(JSON.stringify({ type: "frame", data: b64, t: Date.now() / 1000 }));
+    const t = Date.now() / 1000;
+    ws.current.send(JSON.stringify({ type: "frame", data: b64, t }));
+    onSentRef.current?.(b64, t);
     return true;
   }, [canSend]);
 

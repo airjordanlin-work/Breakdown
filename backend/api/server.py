@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
 import json
 import threading
 import time
@@ -25,7 +26,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from app.pose_estimator import PoseEstimator, is_pose_reliable
+from app.pose_estimator import PoseEstimator, PoseFrame, is_pose_reliable
 from app.buffer import PoseBuffer, WINDOW_LEN
 from app.dtw_engine import DTWEngine
 from app.scorer import Scorer
@@ -206,6 +207,7 @@ class CoachingSession:
         self.lost_frames    = 0
         self.frames_since_rep = 0
         self.future_window: list = []
+        self.future_frames: list = []
         self.attempts       = AttemptTracker()
         # One coach line at a time: a debrief waits for a live cue still in
         # flight instead of talking over it. Tasks are kept so they can't be
@@ -242,6 +244,8 @@ class CoachingSession:
         frame = cv2.flip(bgr, 1)
         rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pose  = self.estimator.process(rgb, keep_raw=True)
+        if isinstance(pose, PoseFrame):
+            pose = dataclasses.replace(pose, captured_at=captured_at)
 
         guidance = None
         tracked  = pose is not None and is_pose_reliable(pose)
@@ -269,6 +273,7 @@ class CoachingSession:
             self.future = self.engine.compare_async(window)
             # DTW path indices point into this exact window, not a later one
             self.future_window = window
+            self.future_frames = list(self.buf._frames)
 
         if self.future is not None and self.future.done():
             try:
@@ -281,7 +286,7 @@ class CoachingSession:
             # or out of frame used to keep scoring the last window over and over.
             rep_ready = self.frames_since_rep >= REP_FRAMES
             if self.dtw_result and self.dtw_result.aligned and tracked and moving and rep_ready:
-                s = self.scorer.score_rep(self.dtw_result, self.future_window)
+                s = self.scorer.score_rep(self.dtw_result, self.future_window, self.future_frames)
                 if s is not None:
                     self.score_result  = s
                     self.flash_counter = KEYFRAME_FLASH

@@ -353,12 +353,16 @@ class Scorer:
         self.best_streak = 0
         self._recent_reps.clear()
 
-    def score_rep(self, dtw_result: DTWResult, window: Sequence[np.ndarray]) -> Optional[ScoreResult]:
+    def score_rep(
+        self, dtw_result: DTWResult, window: Sequence[np.ndarray], frames: Optional[Sequence] = None,
+    ) -> Optional[ScoreResult]:
         """Score one rep: every keyframe, on the live frame DTW aligned to it.
 
         ``window`` is the live landmark window DTW compared, (33, 3) per frame.
         Each joint's result is its average over the keyframes, so one rep gives
         one line per joint. None if not aligned or nothing could be checked.
+        ``frames`` is the PoseFrame list ``window`` came from. With it, each moment
+        also says when the frame was captured and where the joint was in the picture.
         """
         if not dtw_result.aligned:
             return None
@@ -387,13 +391,21 @@ class Scorer:
                 thresholds[spec.joint_name] = spec.threshold
                 tier_here, _ = _score_tier(abs(actual - target), spec.threshold)
                 if tier_here != PERFECT:
-                    moments.append({
+                    moment = {
                         "checkpoint": checkpoint,
                         "of": len(ordered),
                         "joint": spec.joint_name.replace("_", " "),
                         "tier": tier_here,
                         "fix": "straighten" if actual < target else "bend",
-                    })
+                    }
+                    if frames is not None and live_idx < len(frames):
+                        pf = frames[live_idx]
+                        raw = getattr(pf, "raw_landmarks", None)
+                        if getattr(pf, "captured_at", None) is not None and raw is not None:
+                            moment["t"] = float(pf.captured_at)
+                            moment["x"] = round(float(raw[spec.joint_triplet[1]][0]), 4)
+                            moment["y"] = round(float(raw[spec.joint_triplet[1]][1]), 4)
+                    moments.append(moment)
 
         if not samples:
             return None

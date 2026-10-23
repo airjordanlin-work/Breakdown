@@ -104,6 +104,7 @@ def attempt_summary(move_name: str, reps: list[dict]) -> dict:
     Built only from the scorer's results (no model). ``fix.checkpoint`` is the
     keyframe checkpoint where the focus joint was off most often, as "k of n"
     through the move; it is omitted for whole-rep features, which have none.
+    ``fix.t``, ``fix.x`` and ``fix.y`` locate the newest miss at that checkpoint for a replay.
     """
     facts = attempt_facts(move_name, reps)
     fix = None
@@ -112,15 +113,23 @@ def attempt_summary(move_name: str, reps: list[dict]) -> dict:
         fix = {"joint": off["joint"], "fix": off["fix"], "times_off": off["times_off"]}
         where = Counter()
         of = 0
+        latest: dict[int, dict] = {}   # checkpoint -> newest moment that has a capture time
         for rep in reps:
             for m in rep.get("moments", []):
                 if m.get("joint") == off["joint"]:
                     where[m["checkpoint"]] += 1
                     of = m.get("of", of)
+                    if "t" in m:
+                        latest[m["checkpoint"]] = m
         if where:
             checkpoint, _ = max(where.items(), key=lambda kv: (kv[1], -kv[0]))
             fix["checkpoint"] = checkpoint
             fix["of"] = of
+            if checkpoint in latest:
+                # Where to pause a replay: when the frame was captured, and the joint's
+                # position in the (mirrored) picture, 0 to 1 from the top left.
+                m = latest[checkpoint]
+                fix.update({"t": m["t"], "x": m["x"], "y": m["y"]})
     return {
         "type": "rep_summary",
         "move": move_name,

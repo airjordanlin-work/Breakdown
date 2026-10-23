@@ -27,11 +27,14 @@ class PoseFrame:
     landmarks: (33, 3) float32 — x, y, z normalized (hip origin, torso-scaled).
     visibility: (33,) float32 — per-landmark visibility in [0, 1].
     raw_landmarks: (33, 3) float32 — pre-normalization image-space coords (optional).
+    captured_at: when the browser grabbed the frame, in seconds (optional); lets a
+        replay on the phone find the picture this pose came from.
     """
 
     landmarks: np.ndarray
     visibility: np.ndarray
     raw_landmarks: Optional[np.ndarray] = None
+    captured_at: Optional[float] = None
 
 
 def extract_keypoints(pose_landmarks) -> tuple[np.ndarray, np.ndarray]:

@@ -13,6 +13,11 @@ import "../styles/session.css";
 import FreezeMeter      from "../components/FreezeMeter";
 import DemoOverlay      from "../components/DemoOverlay";
 import ResultCard       from "../components/ResultCard";
+import ReplayOverlay    from "../components/ReplayOverlay";
+import { useFrameBuffer } from "../hooks/useFrameBuffer";
+
+// How much of the run-up to the mistake the replay shows, in seconds.
+const REPLAY_LEAD_S = 1.5;
 
 const CAPTION_SIZE_KEY = "breakdown_caption_size";
 
@@ -56,10 +61,19 @@ export default function Session({ sessionId, onEnd }) {
   const [demo,        setDemo]        = useState(null);
   // Result card for the attempt just finished; it clears when the next rep is scored.
   const [summary, setSummary] = useState(null);
+  const frameBuf = useFrameBuffer();
+  const [replay, setReplay] = useState(null);   // { frames, fix } while the mistake replay is open
   const repsNow = useRef(0);
   useEffect(() => {
     if (summary && (stats?.reps ?? 0) > summary.at) setSummary(null);
   }, [stats, summary]);
+  // REPLAY needs the frame from the moment of the miss to still be in this tab's memory.
+  const missFix = summary?.fix;
+  const replayable = missFix?.t != null && frameBuf.between(missFix.t - 0.3, missFix.t + 0.3).length > 0;
+  const openReplay = useCallback(() => {
+    if (!missFix) return;
+    setReplay({ frames: frameBuf.between(missFix.t - REPLAY_LEAD_S, missFix.t + 0.3), fix: missFix });
+  }, [missFix, frameBuf]);
   const demoOpen = useRef(false);   // mirrors `demo` so handleMessage can read it without re-creating
 
   // Why there is no sound, when the backend knows. null means audio is fine so far.
@@ -165,7 +179,7 @@ export default function Session({ sessionId, onEnd }) {
     setWsReady(true);
     sendRef.current?.({ type: "live_cues", on: liveCuesRef.current });
   }, []);
-  const { sendFrame, canSend, sendJson } = useWebSocket(sessionId, handleMessage, onWsOpen, playChunk);
+  const { sendFrame, canSend, sendJson } = useWebSocket(sessionId, handleMessage, onWsOpen, playChunk, frameBuf.add);
   sendRef.current = sendJson;
   const toggleLiveCues = useCallback(() => {
     const next = !liveCuesRef.current;
@@ -399,7 +413,12 @@ export default function Session({ sessionId, onEnd }) {
 
           <FreezeMeter live={freezeLive} result={freezeDone} />
           {wsReady && !framing.ready && <FramingGuide problem={cameraError || framing.problem} />}
-          <ResultCard summary={summary} onClose={() => setSummary(null)} />
+          <ResultCard
+            summary={summary}
+            onClose={() => setSummary(null)}
+            onReplay={replayable ? openReplay : undefined}
+          />
+          {replay && <ReplayOverlay frames={replay.frames} fix={replay.fix} onClose={() => setReplay(null)} />}
           <DemoOverlay key={demo?.requestId} demo={demo} onClose={closeDemo} />
           <CoachCue cue={coachCue} size={CAPTION_SIZES[capSize]} />
         </div>
