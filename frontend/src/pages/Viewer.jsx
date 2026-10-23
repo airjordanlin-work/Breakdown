@@ -26,11 +26,14 @@ export default function Viewer() {
     } else if (msg.type === "coach_audio_skipped") {
       setAudioNote(`No audio for the last cue: ${msg.reason}`);
     } else if (msg.type === "coach_cue") {
+      if (typeof msg.cue !== "string") return;
       setCue(msg.cue);
       setCueKey((k) => k + 1);
       setLatestTurn(msg.turn_id);
       clearTimeout(cueTimer.current);
       cueTimer.current = setTimeout(() => setCue(""), 8000);
+    } else if (msg.type === "demo_end") {
+      setDemo(null);
     } else if (msg.type === "demo") {
       setDemo({ ...msg, _n: Date.now() });
     } else if (msg.type === "frame") {
@@ -43,11 +46,23 @@ export default function Viewer() {
     }
   }, [setLatestTurn]);
 
-  const status = useViewerSocket(onMessage, playChunk);
+  // A different session means a different dancer run: drop the old pose, tallies and caption.
+  const onSession = useCallback(() => {
+    setFrame({}); setStats(null); setCue(""); setDemo(null); setAudioNote(null);
+  }, []);
+
+  const status = useViewerSocket(onMessage, playChunk, onSession);
   const closeDemo = useCallback(() => setDemo(null), []);
 
-  // Sound needs a click or tap first on most browsers and TVs.
-  useEffect(() => { unlock().catch(() => {}); }, [unlock]);
+  // Sound needs a click or tap first on most browsers and TVs, so unlock on the
+  // first one (the button does the same).
+  useEffect(() => {
+    unlock().catch(() => {});
+    if (unlocked) return;
+    const onTap = () => { unlock().catch(() => {}); };
+    window.addEventListener("pointerdown", onTap);
+    return () => window.removeEventListener("pointerdown", onTap);
+  }, [unlocked, unlock]);
 
   const reps = stats?.reps ?? 0;
   const focus = stats?.focus_joint

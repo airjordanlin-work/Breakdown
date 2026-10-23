@@ -71,11 +71,22 @@ export default function Session({ sessionId, onEnd }) {
   };
 
   // Coach audio comes from the backend over the WebSocket.
-  const { unlocked: soundOn, unlock: unlockSound, playChunk, setLatestTurn } = useCoachAudio();
+  const { unlocked: soundOn, unlock: unlockSound, playChunk: playOnPhone, setLatestTurn } = useCoachAudio();
+
+  // With a TV or laptop watching (/view), it plays the voice and the phone stays quiet.
+  const viewerCount = useRef(0);
+  const playChunk = useCallback((buf) => {
+    if (viewerCount.current > 0) return;
+    playOnPhone(buf);
+  }, [playOnPhone]);
 
   const handleMessage = useCallback((msg) => {
     if (msg.type === "voice_status") {
       setAudioNote(msg.available ? null : `Coach voice is off: ${msg.reason}`);
+      return;
+    }
+    if (msg.type === "viewers") {
+      viewerCount.current = Number(msg.count) || 0;
       return;
     }
     if (msg.type === "coach_audio_skipped") {

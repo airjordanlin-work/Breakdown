@@ -547,14 +547,18 @@ async def end_session(session_id: str):
     if session is not None:
         # run off the event loop: close() waits for an in-flight frame to finish
         await asyncio.get_running_loop().run_in_executor(_executor, session.close)
+        hub = getattr(session, "viewers", None)
+        if hub is not None:
+            await hub.close_all()
     return {"status": "closed"}
 
 
 @app.get("/sessions/latest")
 async def latest_session():
-    """The newest open session, so a second screen (/view) can find the phone's session."""
+    """The newest open session with a phone connected, so a second screen (/view) can find it."""
     for sid in reversed(list(_sessions)):
-        if not getattr(_sessions[sid], "closed", False):
+        s = _sessions[sid]
+        if not getattr(s, "closed", False) and getattr(s, "controller", None) is not None:
             return {"session_id": sid}
     return {"session_id": None}
 
@@ -595,10 +599,13 @@ async def viewer_endpoint(websocket: WebSocket, session_id: str):
     await notify_viewer_count(session)
     try:
         while True:
-            msg = json.loads(await websocket.receive_text())
-            if msg.get("type") == "ping":
+            try:
+                msg = json.loads(await websocket.receive_text())
+            except ValueError:
+                continue  # a viewer only pings; ignore anything else
+            if isinstance(msg, dict) and msg.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
         session.viewers.discard(websocket)
@@ -717,6 +724,8 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
             elif msg.get("type") == "demo_end":
                 # The dancer closed the demo (or it finished): live cues resume.
                 session.ai_coach.release()
+                if viewers is not None:
+                    await viewers.broadcast_text(json.dumps({"type": "demo_end"}))
 
             elif msg.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
@@ -724,7 +733,12 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
     except WebSocketDisconnect:
         pass
     finally:
-        pass  # session kept alive for reconnection
+        # The session is kept for reconnection, but a second screen should not
+        # sit on a phone that is gone: closing it makes /view look for the next one.
+        if session.controller is websocket:
+            session.controller = None
+            if viewers is not None:
+                await viewers.close_all()
 
 
 if __name__ == "__main__":
