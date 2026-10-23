@@ -33,6 +33,7 @@ from app.coach import AICoach
 from app.demo import demo_message
 from app.voice import VoiceCoach
 from app.access import configured_token, require_token
+from app.viewers import ViewerHub
 from app.audio_frames import encode_audio_chunk
 from app.imu_protocol import PacketError, unpack_forwarded
 from app.imu_store import ImuStore
@@ -204,6 +205,8 @@ class CoachingSession:
         # garbage-collected mid-flight.
         self.speak_lock     = asyncio.Lock()
         self.coach_tasks: set[asyncio.Task] = set()
+        self.viewers        = ViewerHub()     # read-only second screens (TV, laptop)
+        self.controller: Optional[WebSocket] = None   # the phone's socket
         self.previous_rep: Optional[dict] = None   # payload of the rep before the latest one
         self.latest_rep: Optional[dict] = None
 
@@ -443,11 +446,31 @@ def warm_up_voice(voice: Optional[VoiceCoach]) -> None:
         print(f"VoiceCoach: warm-up synth FAILED after {ms:.0f} ms; cues will be captions only")
 
 
-async def _audio_skipped(websocket: WebSocket, turn_id: str, cue: str, reason: str) -> bool:
+async def _send_text(websocket: WebSocket, text: str, viewers: Optional[ViewerHub] = None) -> None:
+    """Send to the phone, then mirror to any viewers (a viewer failure never blocks the phone)."""
+    await websocket.send_text(text)
+    if viewers is not None:
+        await viewers.broadcast_text(text)
+
+
+async def notify_viewer_count(session) -> None:
+    """Tell the phone how many second screens are watching, so it can mute its own audio."""
+    controller = getattr(session, "controller", None)
+    hub = getattr(session, "viewers", None)
+    if controller is None or hub is None:
+        return
+    try:
+        await controller.send_text(json.dumps({"type": "viewers", "count": hub.count}))
+    except Exception:
+        pass  # phone socket closed
+
+
+async def _audio_skipped(websocket: WebSocket, turn_id: str, cue: str, reason: str,
+                         viewers: Optional[ViewerHub] = None) -> bool:
     print(f"TTS skipped ({reason}), sent caption only: '{cue}'")
-    await websocket.send_text(json.dumps(
+    await _send_text(websocket, json.dumps(
         {"type": "coach_audio_skipped", "turn_id": turn_id, "reason": reason}
-    ))
+    ), viewers)
     return False
 
 
@@ -457,19 +480,21 @@ async def send_coach_cue(
     cue: str,
     timeout: float = TTS_TIMEOUT_SECONDS,
     mode: str = "live",
+    viewers: Optional[ViewerHub] = None,
 ) -> bool:
     """Send a coach cue to the client: caption text first, then the spoken audio.
 
     Text goes first so the caption shows even when TTS is slow, missing or
     fails. When there is no audio, a coach_audio_skipped message says why, so
-    the client can show it. Returns True if audio was sent.
+    the client can show it. Returns True if audio was sent. Everything sent to
+    the phone is mirrored to ``viewers`` too.
     """
     turn_id = uuid.uuid4().hex[:12]
-    await websocket.send_text(json.dumps({"type": "coach_cue", "cue": cue, "turn_id": turn_id, "mode": mode}))
+    await _send_text(websocket, json.dumps({"type": "coach_cue", "cue": cue, "turn_id": turn_id, "mode": mode}), viewers)
 
     status = voice_status(voice)
     if not status["available"]:
-        return await _audio_skipped(websocket, turn_id, cue, status["reason"])
+        return await _audio_skipped(websocket, turn_id, cue, status["reason"], viewers)
     loop = asyncio.get_running_loop()
     start = time.perf_counter()
     try:
@@ -477,10 +502,13 @@ async def send_coach_cue(
             loop.run_in_executor(_tts_executor, voice.synthesize_wav, cue), timeout
         )
     except asyncio.TimeoutError:
-        return await _audio_skipped(websocket, turn_id, cue, f"TTS timed out after {timeout:g} s")
+        return await _audio_skipped(websocket, turn_id, cue, f"TTS timed out after {timeout:g} s", viewers)
     if not wav:
-        return await _audio_skipped(websocket, turn_id, cue, "TTS synth failed, see log above")
-    await websocket.send_bytes(encode_audio_chunk(turn_id, wav))
+        return await _audio_skipped(websocket, turn_id, cue, "TTS synth failed, see log above", viewers)
+    frame = encode_audio_chunk(turn_id, wav)
+    await websocket.send_bytes(frame)
+    if viewers is not None:
+        await viewers.broadcast_bytes(frame)
     ms = (time.perf_counter() - start) * 1000
     print(f"TTS sent {len(wav)} bytes in {ms:.0f} ms: '{cue}'")
     return True
@@ -543,6 +571,31 @@ async def imu_endpoint(websocket: WebSocket):
         pass
 
 
+@app.websocket("/ws/{session_id}/view")
+async def viewer_endpoint(websocket: WebSocket, session_id: str):
+    """Read-only second screen: gets what the phone gets, sends nothing but pings."""
+    await websocket.accept()
+    session = _sessions.get(session_id)
+    if not session:
+        await websocket.send_json({"error": "session not found"})
+        await websocket.close()
+        return
+
+    await websocket.send_text(json.dumps(voice_status(session.voice)))
+    session.viewers.add(websocket)
+    await notify_viewer_count(session)
+    try:
+        while True:
+            msg = json.loads(await websocket.receive_text())
+            if msg.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        session.viewers.discard(websocket)
+        await notify_viewer_count(session)
+
+
 @app.websocket("/ws/{session_id}")
 async def ws_endpoint(websocket: WebSocket, session_id: str):
     await websocket.accept()
@@ -554,6 +607,10 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
 
     loop = asyncio.get_running_loop()
     await websocket.send_text(json.dumps(voice_status(session.voice)))
+    session.controller = websocket
+    viewers = getattr(session, "viewers", None)
+    if viewers is not None and viewers.count:
+        await notify_viewer_count(session)   # a reconnecting phone learns who is watching
 
     try:
         while True:
@@ -575,7 +632,7 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                 coach_ctx = payload.pop("_coach_context", {})
 
                 # send frame data to frontend immediately
-                await websocket.send_text(json.dumps(payload))
+                await _send_text(websocket, json.dumps(payload), viewers)
 
                 # fire AI coach — non-blocking.
                 # A finished freeze gets feedback right away (skips the cooldown);
@@ -595,7 +652,7 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                             # A demo may have started while the debrief was being written.
                             if text and not session.ai_coach.held:
                                 try:
-                                    await send_coach_cue(websocket, session.voice, text, mode="debrief")
+                                    await send_coach_cue(websocket, session.voice, text, mode="debrief", viewers=viewers)
                                 except Exception as e:
                                     print(f"Debrief not sent (socket closed?): {e}")
 
@@ -625,7 +682,7 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                             if cue and not session.ai_coach.held:
                                 # caption + Kokoro audio, streamed to the client
                                 try:
-                                    await send_coach_cue(websocket, session.voice, cue)
+                                    await send_coach_cue(websocket, session.voice, cue, viewers=viewers)
                                 except Exception:
                                     pass  # socket closed mid-send
 
@@ -646,7 +703,7 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                 # The demo is silent: the overlay shows the move and the joint to watch.
                 demo_msg, _line, quiet_s = demo
                 session.ai_coach.hold(quiet_s)
-                await websocket.send_text(json.dumps(demo_msg))
+                await _send_text(websocket, json.dumps(demo_msg), viewers)
 
             elif msg.get("type") == "demo_end":
                 # The dancer closed the demo (or it finished): live cues resume.
