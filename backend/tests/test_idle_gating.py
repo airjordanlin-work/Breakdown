@@ -51,7 +51,7 @@ class CountingScorer:
     def __init__(self):
         self.calls = 0
 
-    def score_rep(self, dtw, window):
+    def score_rep(self, dtw, window, frames=None):
         self.calls += 1
         return None
 
@@ -129,7 +129,7 @@ def test_one_score_per_rep_not_per_comparison():
     from app.scorer import KeyframeResult, ScoreResult
 
     class RepScorer(CountingScorer):
-        def score_rep(self, dtw, window):
+        def score_rep(self, dtw, window, frames=None):
             self.calls += 1
             r = KeyframeResult("left_elbow", 150.0, 160.0, 10.0, "Perfect", 100.0)
             return ScoreResult([r], 100.0, 1.0, "br_01")
@@ -148,7 +148,7 @@ def test_stopping_after_reps_hands_the_attempt_to_the_debrief_once():
     from app.scorer import KeyframeResult, ScoreResult
 
     class RepScorer(CountingScorer):
-        def score_rep(self, dtw, window):
+        def score_rep(self, dtw, window, frames=None):
             self.calls += 1
             r = KeyframeResult("left_elbow", 120.0, 160.0, 40.0, "Miss", 0.0)
             return ScoreResult([r], 0.0, 1.0, "br_01")
