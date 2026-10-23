@@ -32,6 +32,15 @@ class ViewerHub:
     def discard(self, ws: Any) -> None:
         self._viewers.discard(ws)
 
+    async def close_all(self) -> None:
+        """Close every viewer, so a page following this session looks for the next one."""
+        for ws in list(self._viewers):
+            self._viewers.discard(ws)
+            try:
+                await asyncio.wait_for(ws.close(), SEND_TIMEOUT_S)
+            except Exception:
+                pass  # already closed
+
     async def _send(self, send_name: str, data: str | bytes) -> bool:
         """Send to every viewer; drop any that fail or time out. True if the set changed."""
         changed = False

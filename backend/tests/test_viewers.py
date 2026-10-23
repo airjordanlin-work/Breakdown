@@ -99,10 +99,11 @@ def test_viewer_socket_mirrors_the_phone_and_reports_count():
                 phone.send_text(json.dumps({"type": "demo_request"}))
                 assert json.loads(phone.receive_text())["type"] == "demo"
                 assert json.loads(tv.receive_text())["type"] == "demo"
+                phone.send_text(json.dumps({"type": "demo_end"}))
+                assert json.loads(tv.receive_text()) == {"type": "demo_end"}
                 # a ping on the viewer socket gets its own pong, nothing is forwarded to the phone
                 tv.send_text(json.dumps({"type": "ping"}))
                 assert json.loads(tv.receive_text()) == {"type": "pong"}
-            assert server._sessions["sess-view"].viewers.count == 1
         assert server._sessions["sess-view"].viewers.count == 0
     finally:
         server._sessions.pop("sess-view", None)
@@ -127,11 +128,13 @@ def test_viewer_for_an_unknown_session_is_refused():
         assert json.loads(tv.receive_text()) == {"error": "session not found"}
 
 
-def test_latest_session_is_the_newest_open_one():
-    old, new, closed = make_session(), make_session(), make_session()
+def test_latest_session_is_the_newest_open_one_with_a_phone():
+    old, new, closed, no_phone = make_session(), make_session(), make_session(), make_session()
+    for s in (old, new, closed):
+        s.controller = object()
     closed.closed = True
     server._sessions.clear()
-    server._sessions.update({"a": old, "b": new, "c": closed})
+    server._sessions.update({"a": old, "b": new, "c": closed, "d": no_phone})
     try:
         assert TestClient(app).get("/sessions/latest").json() == {"session_id": "b"}
         server._sessions.pop("b")
@@ -140,3 +143,46 @@ def test_latest_session_is_the_newest_open_one():
         assert TestClient(app).get("/sessions/latest").json() == {"session_id": None}
     finally:
         server._sessions.clear()
+
+
+def test_ending_a_session_closes_its_viewers():
+    server._sessions["sess-end"] = make_session()
+    try:
+        client = TestClient(app)
+        with client.websocket_connect("/ws/sess-end/view") as tv:
+            tv.receive_text()
+            assert client.delete("/session/sess-end").json() == {"status": "closed"}
+            try:
+                tv.receive_text()
+                raise AssertionError("viewer should have been closed")
+            except Exception as e:
+                assert "AssertionError" not in type(e).__name__
+    finally:
+        server._sessions.pop("sess-end", None)
+
+
+def test_viewer_survives_junk_input():
+    server._sessions["sess-junk"] = make_session()
+    try:
+        with TestClient(app).websocket_connect("/ws/sess-junk/view") as tv:
+            tv.receive_text()
+            tv.send_text("not json")
+            tv.send_text("[1, 2]")
+            tv.send_text(json.dumps({"type": "ping"}))
+            assert json.loads(tv.receive_text()) == {"type": "pong"}
+    finally:
+        server._sessions.pop("sess-junk", None)
+
+
+def test_viewers_are_closed_when_the_phone_leaves():
+    server._sessions["sess-gone"] = make_session()
+    try:
+        client = TestClient(app)
+        with client.websocket_connect("/ws/sess-gone/view") as tv:
+            tv.receive_text()
+            with client.websocket_connect("/ws/sess-gone") as phone:
+                phone.receive_text()
+            assert server._sessions["sess-gone"].controller is None
+            assert server._sessions["sess-gone"].viewers.count == 0
+    finally:
+        server._sessions.pop("sess-gone", None)
