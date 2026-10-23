@@ -104,6 +104,11 @@ GHOST_BONES = [
 ]
 
 
+# Spoken cues while the dancer is mid-rep distract newer dancers, so the coach
+# waits for the pause and debriefs the attempt. The dancer can switch them on.
+LIVE_CUES_DEFAULT = False
+
+
 class SessionConfig(BaseModel):
     voice_gender: str = "female"
     zoom: float       = 1.0
@@ -186,6 +191,7 @@ class CoachingSession:
         self.engine         = DTWEngine(REFERENCE_DIR, only_move=config.move_id)
         self.scorer         = Scorer(REFERENCE_DIR)
         self.ai_coach       = AICoach()
+        self.ai_coach.live_cues = LIVE_CUES_DEFAULT
         self.voice          = VoiceCoach(gender=config.voice_gender)
         self.future         = None
         self.flash_counter  = 0
@@ -713,6 +719,11 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                 demo_msg, _line, quiet_s = demo
                 session.ai_coach.hold(quiet_s)
                 await _send_text(websocket, json.dumps(demo_msg), viewers)
+
+            elif msg.get("type") == "live_cues":
+                session.ai_coach.live_cues = bool(msg.get("on"))
+                await websocket.send_text(json.dumps(
+                    {"type": "live_cues", "on": session.ai_coach.live_cues}))
 
             elif msg.get("type") == "demo_end":
                 # The dancer closed the demo (or it finished): live cues resume.

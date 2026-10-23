@@ -131,8 +131,23 @@ export default function Session({ sessionId, onEnd }) {
     return () => window.removeEventListener("pointerdown", onTap);
   }, [soundOn, unlockSound]);
 
-  const onWsOpen  = useCallback(() => setWsReady(true), []);
+  // Spoken cues mid-rep are off by default; the coach debriefs after each attempt.
+  // The setting lives here and is re-sent whenever the socket (re)opens.
+  const [liveCues, setLiveCues] = useState(false);
+  const liveCuesRef = useRef(false);
+  const sendRef = useRef(null);
+  const onWsOpen  = useCallback(() => {
+    setWsReady(true);
+    sendRef.current?.({ type: "live_cues", on: liveCuesRef.current });
+  }, []);
   const { sendFrame, canSend, sendJson } = useWebSocket(sessionId, handleMessage, onWsOpen, playChunk);
+  sendRef.current = sendJson;
+  const toggleLiveCues = useCallback(() => {
+    const next = !liveCuesRef.current;
+    liveCuesRef.current = next;
+    setLiveCues(next);
+    sendJson({ type: "live_cues", on: next });
+  }, [sendJson]);
   const requestDemo = useCallback(() => sendJson({ type: "demo_request" }), [sendJson]);
   const closeDemo   = useCallback(() => {
     demoOpen.current = false;
@@ -204,6 +219,22 @@ export default function Session({ sessionId, onEnd }) {
             }}
           >
             TEXT {["S", "M", "L"][capSize]}
+          </button>
+
+          <button
+            className="sess-btn"
+            onClick={toggleLiveCues}
+            disabled={!wsReady}
+            aria-pressed={liveCues}
+            aria-label="Spoken cues while you dance"
+            style={{
+              background: "transparent", border: `1px solid ${liveCues ? "#4cff4c" : "#2a2a2a"}`,
+              color: liveCues ? "#4cff4c" : "#888", padding: "4px 14px",
+              fontFamily: "'Anton',sans-serif",
+              fontSize: 10, letterSpacing: "0.15em", cursor: "pointer",
+            }}
+          >
+            LIVE CUES {liveCues ? "ON" : "OFF"}
           </button>
 
           <button
