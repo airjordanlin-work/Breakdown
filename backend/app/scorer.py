@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -66,6 +66,9 @@ class ScoreResult:
     points_this_attempt: float
     combo_multiplier_applied: float
     move_name: str
+    # Where in the move a joint was off: one entry per keyframe checkpoint and
+    # joint that was not Perfect, e.g. {"checkpoint": 2, "of": 3, "joint": ..., "tier": ..., "fix": ...}.
+    moments: list = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -366,7 +369,9 @@ class Scorer:
 
         samples: dict[str, list[tuple[float, float, float]]] = {}
         thresholds: dict[str, float] = {}
-        for kf in keyframes:
+        moments: list[dict] = []
+        ordered = sorted(keyframes, key=lambda k: k.frame)
+        for checkpoint, kf in enumerate(ordered, start=1):
             live_idx = _live_frame_index(dtw_result, kf.frame)
             if live_idx is None or live_idx >= len(window):
                 continue
@@ -380,6 +385,15 @@ class Scorer:
                 actual = _angle_xy(live, spec.joint_triplet)
                 samples.setdefault(spec.joint_name, []).append((actual, target, actual - target))
                 thresholds[spec.joint_name] = spec.threshold
+                tier_here, _ = _score_tier(abs(actual - target), spec.threshold)
+                if tier_here != PERFECT:
+                    moments.append({
+                        "checkpoint": checkpoint,
+                        "of": len(ordered),
+                        "joint": spec.joint_name.replace("_", " "),
+                        "tier": tier_here,
+                        "fix": "straighten" if actual < target else "bend",
+                    })
 
         if not samples:
             return None
@@ -391,7 +405,7 @@ class Scorer:
             tier, points = _score_tier(diff, thresholds[name])
             joint_results.append(KeyframeResult(name, actual, target, diff, tier, points))
         joint_results.extend(self._feature_results(dtw_result.move_name, window, reference))
-        return self._record(joint_results, dtw_result.move_name)
+        return self._record(joint_results, dtw_result.move_name, moments)
 
     def _feature_results(
         self,
@@ -422,7 +436,9 @@ class Scorer:
             for f in compare_features(names, live, reference)
         ]
 
-    def _record(self, joint_results: list[KeyframeResult], move_name: str) -> ScoreResult:
+    def _record(
+        self, joint_results: list[KeyframeResult], move_name: str, moments: Optional[list[dict]] = None,
+    ) -> ScoreResult:
         """Update every tally for one scored attempt and return its result."""
         attempt_tier = _attempt_tier(joint_results)
         self._update_streak(attempt_tier)
@@ -453,6 +469,7 @@ class Scorer:
             points_this_attempt=scored_points,
             combo_multiplier_applied=combo,
             move_name=move_name,
+            moments=moments or [],
         )
 
     def score(self, dtw_result: DTWResult, pose_frame: PoseFrame) -> Optional[ScoreResult]:

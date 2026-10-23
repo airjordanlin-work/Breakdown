@@ -96,3 +96,37 @@ def attempt_facts(move_name: str, reps: list[dict], session: Optional[dict] = No
     if session:
         facts["session"] = {k: session[k] for k in ("reps", "clean_reps", "best_streak") if k in session}
     return facts
+
+
+def attempt_summary(move_name: str, reps: list[dict]) -> dict:
+    """The result card for a finished attempt: what landed, what to fix, and where.
+
+    Built only from the scorer's results (no model). ``fix.checkpoint`` is the
+    keyframe checkpoint where the focus joint was off most often, as "k of n"
+    through the move; it is omitted for whole-rep features, which have none.
+    """
+    facts = attempt_facts(move_name, reps)
+    fix = None
+    off = facts["off_most"]
+    if off:
+        fix = {"joint": off["joint"], "fix": off["fix"], "times_off": off["times_off"]}
+        where = Counter()
+        of = 0
+        for rep in reps:
+            for m in rep.get("moments", []):
+                if m.get("joint") == off["joint"]:
+                    where[m["checkpoint"]] += 1
+                    of = m.get("of", of)
+        if where:
+            checkpoint, _ = max(where.items(), key=lambda kv: (kv[1], -kv[0]))
+            fix["checkpoint"] = checkpoint
+            fix["of"] = of
+    return {
+        "type": "rep_summary",
+        "move": move_name,
+        "reps": facts["reps"],
+        "clean_reps": facts["clean_reps"],
+        "best_streak": facts["best_streak"],
+        "went_well": facts["landed_every_rep"],
+        "fix": fix,
+    }

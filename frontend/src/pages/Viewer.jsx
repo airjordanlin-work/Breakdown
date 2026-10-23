@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import SkeletonCanvas from "../components/SkeletonCanvas";
 import DemoOverlay from "../components/DemoOverlay";
+import ResultCard from "../components/ResultCard";
 import { useViewerSocket } from "../hooks/useViewerSocket";
 import { useCoachAudio } from "../hooks/useCoachAudio";
 import "../styles/viewer.css";
@@ -15,6 +16,8 @@ export default function Viewer() {
   const [cue, setCue] = useState("");
   const [cueKey, setCueKey] = useState(0);
   const [demo, setDemo] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const repsNow = useRef(0);
   const [audioNote, setAudioNote] = useState(null);
   const cueTimer = useRef(null);
 
@@ -32,6 +35,8 @@ export default function Viewer() {
       setLatestTurn(msg.turn_id);
       clearTimeout(cueTimer.current);
       cueTimer.current = setTimeout(() => setCue(""), 8000);
+    } else if (msg.type === "rep_summary") {
+      setSummary({ ...msg, at: repsNow.current });
     } else if (msg.type === "demo_end") {
       setDemo(null);
     } else if (msg.type === "demo") {
@@ -42,13 +47,13 @@ export default function Viewer() {
         ghostBones: msg.ghost_bones, ghostAnchor: msg.ghost_anchor,
         aligned: msg.aligned, fillRatio: msg.fill_ratio, moveName: msg.move_name,
       });
-      if (msg.stats) setStats(msg.stats);
+      if (msg.stats) { setStats(msg.stats); repsNow.current = msg.stats.reps; }
     }
   }, [setLatestTurn]);
 
   // A different session means a different dancer run: drop the old pose, tallies and caption.
   const onSession = useCallback(() => {
-    setFrame({}); setStats(null); setCue(""); setDemo(null); setAudioNote(null);
+    setFrame({}); setStats(null); setCue(""); setDemo(null); setSummary(null); setAudioNote(null);
   }, []);
 
   const status = useViewerSocket(onMessage, playChunk, onSession);
@@ -63,6 +68,10 @@ export default function Viewer() {
     window.addEventListener("pointerdown", onTap);
     return () => window.removeEventListener("pointerdown", onTap);
   }, [unlocked, unlock]);
+
+  useEffect(() => {
+    if (summary && (stats?.reps ?? 0) > summary.at) setSummary(null);
+  }, [stats, summary]);
 
   const reps = stats?.reps ?? 0;
   const focus = stats?.focus_joint
@@ -82,6 +91,7 @@ export default function Viewer() {
       <div className="viewer-main">
         <div className="viewer-stage">
           <SkeletonCanvas {...frame} mirror />
+          <ResultCard summary={summary} big />
           <DemoOverlay key={demo?._n} demo={demo} onClose={closeDemo} />
         </div>
         <div className="viewer-side">
