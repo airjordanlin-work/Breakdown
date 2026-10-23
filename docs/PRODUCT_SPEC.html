@@ -326,6 +326,9 @@ Server to client:
 - `coach_cue {cue, turn_id, mode}` (EXISTS). Caption text, sent before the matching `coach_audio_chunk`, so it still shows if TTS fails or times out. `mode` is `live` for a cue while moving, `debrief` for the summary sent when the dancer stops after scored reps.
 - `voice_status {available, reason}` (EXISTS). Sent once when the socket opens. `reason` says why coach audio is off (for example the Kokoro model file is missing); the UI shows it.
 - `demo {move_id, move_name, speed, loops, seconds, focus, highlight}` (EXISTS). Play the move's reference clip (`GET /moves/{move_id}/preview`) at `speed` for `loops` plays, ringing the `highlight` preview joints. `focus` is the session's measured focus joint, or null when nothing was flagged yet. Live cues stay quiet while it plays.
+- `viewers {count}` (EXISTS). Sent to the phone when a second screen joins or leaves the session, so the phone can mute its own audio while a TV or laptop is showing and speaking.
+
+Second screen (EXISTS, backend only so far): `WS /ws/{session_id}/view` is a read-only socket on the same session, with the same access token as every other route. It receives what the phone receives: `voice_status`, `frame` results (landmarks and scores, never video), `coach_cue`, `coach_audio_chunk`, `coach_audio_skipped` and `demo`. It sends nothing but `ping`. A viewer that is slow or fails is dropped and never stalls the phone. A viewer page and pairing are PROPOSED.
 - `demo_unavailable {reason}` (EXISTS).
 - `coach_audio_skipped {turn_id, reason}` (EXISTS). Sent after a `coach_cue` caption when no audio follows (TTS missing, timed out or failed).
 - `state {phase, move_id, attempt_id?}`
