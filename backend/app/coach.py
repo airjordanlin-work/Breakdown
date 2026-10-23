@@ -365,6 +365,7 @@ class AICoach:
         self._available: bool     = llm is not None or bool(ANTHROPIC_API_KEY)
         self.refused: int         = 0   # replies dropped by the grounding guard
         self._quiet_until: float  = 0.0  # no live cues before this time (a demo is playing)
+        self.live_cues: bool      = True  # False: stay silent mid-rep; the debrief still runs
 
         if not self._available:
             print("AICoach: ANTHROPIC_API_KEY not set — using templated cues")
@@ -406,7 +407,7 @@ class AICoach:
         No body in frame, a half-full buffer, or standing still all mean
         silence; the on-screen guide handles framing.
         """
-        if self._pending or not (tracked and moving and fill_ratio >= 1.0):
+        if not self.live_cues or self._pending or not (tracked and moving and fill_ratio >= 1.0):
             return False
         if time.time() < self._quiet_until:
             return False

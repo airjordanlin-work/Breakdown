@@ -52,7 +52,7 @@ Skip the PROPOSED rows for this clip. Add them to the checklist once those PRs l
 
 1. Stand still for a moment so the guide clears. The coach should stay quiet while you are still.
 2. Do the cross step for a few reps. Watch for the move name in the top bar, the buffer reaching READY, and the reps and clean count on the score chip.
-3. Keep going until you hear at least two live cues. Each one should appear as a caption and play out loud at the same time.
+3. Tap **LIVE CUES OFF** in the top bar so it reads ON (live cues are off by default), then keep going until you hear at least two live cues. Each one should appear as a caption and play out loud at the same time. Tap it again to turn them off; the coach should then stay quiet while you move.
 4. Stop and stand still. You should hear one short debrief about the attempt you just did.
 5. Tap **END SESSION**.
 
@@ -81,7 +81,8 @@ Fill this in on the device. Write down what you saw, not what you expected. If a
 
 **Coach voice (FR-10)**
 - [ ] No coach cue while you stand still before dancing
-- [ ] Live cues appear as captions while you move
+- [ ] With **LIVE CUES** off (the default), the coach is silent while you move
+- [ ] With **LIVE CUES** on, cues appear as captions while you move
 - [ ] Each cue is audible from the phone speaker, not the laptop
 - [ ] Audio starts close to when the caption shows
 - [ ] No **Coach voice is off** or **No audio for the last cue** banner
