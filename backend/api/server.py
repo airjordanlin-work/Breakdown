@@ -44,6 +44,7 @@ from app.activity import is_moving
 from app.attempts import AttemptTracker, attempt_summary
 from app.chat import CoachChat, chat_facts
 from app.orchestrator import VoiceOrchestrator
+from app.stt import STT_TIMEOUT_S, get_stt
 from app.move_catalog import load_catalog, preview as move_preview
 
 # Every route needs the shared ACCESS_TOKEN when one is set.
@@ -96,6 +97,7 @@ _executor      = ThreadPoolExecutor(max_workers=4)
 # its own Kokoro calls. The timeout below includes queue time on purpose: audio
 # that arrives after the deadline is stale for a live cue.
 _tts_executor  = ThreadPoolExecutor(max_workers=2)
+_stt_executor  = ThreadPoolExecutor(max_workers=1)   # one clip at a time
 TTS_TIMEOUT_SECONDS = 5.0
 
 # One shared IMU store for the whole server: there's one physical device.
@@ -532,9 +534,16 @@ def make_orchestrator(session: "CoachingSession", websocket: WebSocket,
         return chat_facts(getattr(session, "last_move_name", ""), getattr(session, "last_stats", None),
                           getattr(session, "last_summary", None))
 
+    stt = get_stt()
+
+    async def transcribe(pcm: bytes):
+        loop = asyncio.get_running_loop()
+        return await asyncio.wait_for(loop.run_in_executor(_stt_executor, stt.transcribe, pcm), STT_TIMEOUT_S)
+
     if getattr(session, "chat", None) is None:
         session.chat = CoachChat()   # sessions built without __init__ (tests)
-    session.orchestrator = VoiceOrchestrator(emit, speak, facts, chat=session.chat)
+    session.orchestrator = VoiceOrchestrator(emit, speak, facts, chat=session.chat,
+                                             transcribe=transcribe, stt_available=stt.available)
     return session.orchestrator
 
 
@@ -602,6 +611,9 @@ async def start_session(config: SessionConfig):
     session = CoachingSession(config)
     _sessions[sid] = session
     _tts_executor.submit(warm_up_voice, session.voice)
+    stt = get_stt()
+    if stt.available and hasattr(stt, "warm_up"):
+        _stt_executor.submit(stt.warm_up)   # first use downloads and loads the model
     return {"session_id": sid}
 
 
@@ -625,6 +637,13 @@ async def latest_session():
         if not getattr(s, "closed", False) and getattr(s, "controller", None) is not None:
             return {"session_id": sid}
     return {"session_id": None}
+
+
+@app.get("/stt/status")
+async def stt_status():
+    """Whether push-to-talk can hear on this backend, and why not."""
+    stt = get_stt()
+    return {"available": stt.available, "reason": stt.unavailable_reason}
 
 
 @app.get("/imu/status")
@@ -799,6 +818,19 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                 text = msg.get("text")
                 if isinstance(text, str):
                     _track(session, asyncio.create_task(orchestrator.handle_text(text, "text")))
+
+            elif msg.get("type") == "ptt_start":
+                await orchestrator.ptt_start()
+
+            elif msg.get("type") == "ptt_audio":
+                orchestrator.ptt_audio(msg.get("data"))
+
+            elif msg.get("type") == "ptt_end":
+                # Speech to text can take a while; keep reading frames meanwhile.
+                _track(session, asyncio.create_task(orchestrator.ptt_end()))
+
+            elif msg.get("type") == "ptt_cancel":
+                await orchestrator.ptt_cancel()
 
             elif msg.get("type") == "live_cues":
                 session.ai_coach.live_cues = bool(msg.get("on"))

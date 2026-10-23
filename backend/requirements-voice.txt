@@ -1,0 +1,4 @@
+# Optional: local speech to text for push-to-talk (app/stt.py).
+# Install on top of requirements.txt: pip install -r backend/requirements-voice.txt
+# The first push-to-talk turn downloads the Whisper model (internet needed once).
+faster-whisper==1.2.1
