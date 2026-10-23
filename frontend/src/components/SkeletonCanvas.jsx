@@ -163,7 +163,7 @@ function drawBufferBar(ctx, W, H, fillRatio) {
 
 export default function SkeletonCanvas({
   landmarks, visibility, ghostBones, ghostAnchor,
-  aligned, fillRatio, moveName, width=640, height=480,
+  aligned, fillRatio, moveName, width=640, height=480, mirror=false,
 }) {
   const canvasRef    = useRef(null);
   const containerRef = useRef(null);
@@ -197,13 +197,17 @@ export default function SkeletonCanvas({
     if (!hasBody) {
       drawNoBody(ctx, W, H);
     } else {
+      // Mirror view (second screen): flip the body but never the text.
+      ctx.save();
+      if (mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); }
       drawGhost(ctx, W, H, ghostBones, ghostAnchor, aligned);
       drawSkeleton(ctx, W, H, landmarks, visibility||[]);
+      ctx.restore();
     }
 
     drawMoveName(ctx, W, H, moveName);
     drawBufferBar(ctx, W, H, fillRatio);
-  }, [landmarks, visibility, ghostBones, ghostAnchor, aligned, fillRatio, moveName]);
+  }, [landmarks, visibility, ghostBones, ghostAnchor, aligned, fillRatio, moveName, mirror]);
 
   return (
     <div ref={containerRef} style={{ width:"100%", height:"100%", position:"relative" }}>
