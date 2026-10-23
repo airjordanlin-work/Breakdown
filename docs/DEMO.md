@@ -36,6 +36,8 @@ Skip the PROPOSED rows for this clip. Add them to the checklist once those PRs l
 
    Check the backend log for a warning that `ACCESS_TOKEN` is unset. There should be none. The coach and voice only load when a session starts, so check them after step 5 below: the log should print `AICoach: ready` and `VoiceCoach: ready`. If the app shows `Coach voice is off`, Kokoro did not load; the log says why.
 
+Shortcut: stop the servers and run `./dev.sh --tunnel` (needs cloudflared; `qrencode` adds the QR). It prints the phone link with your token and a QR code. Scan it and skip steps 2 and 3. PROPOSED, not yet run on a Mac.
+
 2. In a second terminal, start the tunnel:
 
    ```bash
