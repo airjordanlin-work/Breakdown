@@ -15,6 +15,9 @@ import DemoOverlay      from "../components/DemoOverlay";
 import ResultCard       from "../components/ResultCard";
 import ReplayOverlay    from "../components/ReplayOverlay";
 import { useFrameBuffer } from "../hooks/useFrameBuffer";
+import { useMicCapture, MAX_HOLD_MS } from "../hooks/useMicCapture";
+import TalkButton       from "../components/TalkButton";
+import ChatBox          from "../components/ChatBox";
 
 // How much of the run-up to the mistake the replay shows, in seconds.
 const REPLAY_LEAD_S = 1.5;
@@ -79,6 +82,22 @@ export default function Session({ sessionId, onEnd }) {
   // Why there is no sound, when the backend knows. null means audio is fine so far.
   const [audioNote, setAudioNote] = useState(null);
 
+  // Talking to the coach: what it is doing, what it heard, and whether it can hear at all.
+  const [voiceState, setVoiceState] = useState("idle");
+  const [heard, setHeard] = useState(null);
+  const heardTimer = useRef(null);
+  const [sttOk, setSttOk] = useState(null);   // null until /stt/status answers
+  const [micNote, setMicNote] = useState(null);
+  const [holding, setHolding] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    apiFetch("/stt/status")
+      .then((r) => r.json())
+      .then((s) => alive && setSttOk(Boolean(s.available)))
+      .catch(() => alive && setSttOk(false));
+    return () => { alive = false; };
+  }, []);
+
   // stopCapture is defined below; the ref lets handleEnd stop frames before
   // the backend tears the session down.
   const stopCaptureRef = useRef(null);
@@ -108,6 +127,16 @@ export default function Session({ sessionId, onEnd }) {
     }
     if (msg.type === "rep_summary") {
       setSummary({ ...msg, at: repsNow.current });
+      return;
+    }
+    if (msg.type === "voice_state") {
+      if (!msg.busy) setVoiceState(msg.state);
+      return;
+    }
+    if (msg.type === "transcript") {
+      setHeard(msg.text);
+      clearTimeout(heardTimer.current);
+      heardTimer.current = setTimeout(() => setHeard(null), 6000);
       return;
     }
     if (msg.type === "viewers") {
@@ -177,6 +206,7 @@ export default function Session({ sessionId, onEnd }) {
   const sendRef = useRef(null);
   const onWsOpen  = useCallback(() => {
     setWsReady(true);
+    setVoiceState("idle");   // a new socket starts with no turn running on the server
     sendRef.current?.({ type: "live_cues", on: liveCuesRef.current });
   }, []);
   const { sendFrame, canSend, sendJson } = useWebSocket(sessionId, handleMessage, onWsOpen, playChunk, frameBuf.add);
@@ -188,6 +218,44 @@ export default function Session({ sessionId, onEnd }) {
     sendJson({ type: "live_cues", on: next });
   }, [sendJson]);
   const requestDemo = useCallback(() => sendJson({ type: "demo_request" }), [sendJson]);
+
+  // Push-to-talk: the server gets ptt_start, audio chunks while held, then ptt_end.
+  const mic = useMicCapture(useCallback((b64) => { sendJson({ type: "ptt_audio", data: b64 }); }, [sendJson]));
+  const holdingRef = useRef(false);
+  const holdTimer = useRef(null);
+  const endTalk = useCallback(() => {
+    if (!holdingRef.current) return;
+    holdingRef.current = false;
+    setHolding(false);
+    clearTimeout(holdTimer.current);
+    mic.stop();   // sends the last chunk first
+    sendJson({ type: "ptt_end" });
+  }, [mic, sendJson]);
+  const cancelTalk = useCallback(() => {
+    if (!holdingRef.current) return;
+    holdingRef.current = false;
+    setHolding(false);
+    clearTimeout(holdTimer.current);
+    mic.stop();
+    sendJson({ type: "ptt_cancel" });
+  }, [mic, sendJson]);
+  const startTalk = useCallback(() => {
+    setMicNote(null);
+    unlockSound().catch(() => {});
+    if (!sendJson({ type: "ptt_start" })) return;
+    if (sttOk === false) return;   // the coach answers "type instead"; no need for the mic
+    holdingRef.current = true;
+    setHolding(true);
+    holdTimer.current = setTimeout(endTalk, MAX_HOLD_MS);
+    mic.start().catch((err) => {
+      setMicNote(err?.name === "NotAllowedError"
+        ? "Microphone blocked. Allow it for this site in Safari settings."
+        : `Microphone unavailable: ${err?.message || err}`);
+      cancelTalk();
+    });
+  }, [mic, sendJson, sttOk, endTalk, cancelTalk, unlockSound]);
+  useEffect(() => () => { clearTimeout(holdTimer.current); clearTimeout(heardTimer.current); mic.stop(); }, [mic]);
+  const sendChat = useCallback((text) => sendJson({ type: "chat", text }), [sendJson]);
   const closeDemo   = useCallback(() => {
     demoOpen.current = false;
     setDemo(null);
@@ -421,6 +489,21 @@ export default function Session({ sessionId, onEnd }) {
           {replay && <ReplayOverlay frames={replay.frames} fix={replay.fix} onClose={() => setReplay(null)} />}
           <DemoOverlay key={demo?.requestId} demo={demo} onClose={closeDemo} />
           <CoachCue cue={coachCue} size={CAPTION_SIZES[capSize]} />
+          {wsReady && (debugMode || sttOk === false) && (
+            <ChatBox onSend={sendChat} disabled={voiceState !== "idle"} />
+          )}
+          {wsReady && (
+            <TalkButton
+              state={voiceState}
+              holding={holding}
+              disabled={!wsReady}
+              onStart={startTalk}
+              onEnd={endTalk}
+              onCancel={cancelTalk}
+              heard={heard}
+              note={micNote}
+            />
+          )}
         </div>
 
         {/* ── sidebar ── */}

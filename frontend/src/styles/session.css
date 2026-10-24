@@ -167,7 +167,12 @@
   .coach-cue {
     bottom: max(16px, env(safe-area-inset-bottom));
     padding: 10px 16px;
+    /* leave the bottom-right corner to the talk button */
+    left: 12px;
+    transform: none;
+    max-width: calc(100% - 124px);
   }
+  .talk-wrap { bottom: max(14px, env(safe-area-inset-bottom)); }
   .framing-hint { font-size: 11px; }
 }
 
@@ -196,3 +201,38 @@
   .framing-problem { font-size: 15px; overflow-wrap: anywhere; }
   .framing-hint { display: none; }
 }
+
+/* Push-to-talk and the typed question box */
+.talk-wrap {
+  position: absolute; right: 14px; bottom: 14px; z-index: 6;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+  max-width: 60%;
+}
+.talk-btn {
+  width: 84px; height: 84px; border-radius: 50%;
+  background: #120606; border: 2px solid #ff2d2d; color: #ff2d2d;
+  font-family: 'Anton', sans-serif; font-size: 11px; letter-spacing: 0.12em; line-height: 1.2;
+  cursor: pointer; touch-action: none;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.talk-btn.on { background: #ff2d2d; color: #060608; transform: scale(1.08); }
+.talk-btn.busy { border-color: #ffc14c; color: #ffc14c; }
+.talk-btn:disabled { opacity: 0.35; }
+.talk-heard, .talk-note {
+  background: rgba(6, 6, 8, 0.85); border: 1px solid #222; padding: 4px 8px;
+  font-size: 11px; letter-spacing: 0.06em; color: #bbb; text-align: right;
+}
+.talk-note { color: #ffc14c; border-color: rgba(255, 193, 76, 0.3); }
+.chat-box {
+  position: absolute; left: 14px; top: 72px; z-index: 6;
+  display: flex; gap: 6px; width: min(340px, calc(100% - 28px));
+}
+.chat-box input {
+  flex: 1; min-width: 0; background: #0b0b10; border: 1px solid #2a2a2a; color: #ddd;
+  padding: 8px 10px; font-size: 16px; /* 16px stops iOS zooming in on focus */
+}
+.chat-box button {
+  background: transparent; border: 1px solid #ff2d2d; color: #ff2d2d;
+  font-family: 'Anton', sans-serif; font-size: 10px; letter-spacing: 0.15em; padding: 0 12px;
+}
+.chat-box button:disabled { opacity: 0.35; }
