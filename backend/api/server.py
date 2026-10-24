@@ -42,6 +42,8 @@ from app.imu_store import ImuStore
 from app.freeze_monitor import FreezeMonitor
 from app.activity import is_moving
 from app.attempts import AttemptTracker, attempt_summary
+from app.chat import CoachChat, chat_facts
+from app.orchestrator import VoiceOrchestrator
 from app.move_catalog import load_catalog, preview as move_preview
 
 # Every route needs the shared ACCESS_TOKEN when one is set.
@@ -258,6 +260,12 @@ class CoachingSession:
         self.controller: Optional[WebSocket] = None   # the phone's socket
         self.previous_rep: Optional[dict] = None   # payload of the rep before the latest one
         self.latest_rep: Optional[dict] = None
+        # What the dancer's own questions may be answered from (app/chat.py).
+        self.chat           = CoachChat()
+        self.last_stats: Optional[dict] = None
+        self.last_summary: Optional[dict] = None
+        self.last_move_name = ""
+        self.orchestrator: Optional[VoiceOrchestrator] = None
 
         dummy = np.zeros((480, 640, 3), dtype=np.uint8)
         self.estimator.process(dummy)
@@ -526,6 +534,32 @@ async def _audio_skipped(websocket: WebSocket, turn_id: str, cue: str, reason: s
     return False
 
 
+def make_orchestrator(session: "CoachingSession", websocket: WebSocket,
+                      viewers: Optional[ViewerHub]) -> VoiceOrchestrator:
+    """User turns for this phone socket. The conversation (history, limits) lives on the session."""
+    async def emit(msg: dict) -> None:
+        try:
+            await _send_text(websocket, json.dumps(msg), viewers)
+        except Exception:
+            pass  # phone socket closed
+
+    async def speak(text: str) -> None:
+        async with session.speak_lock:
+            try:
+                await send_coach_cue(websocket, session.voice, text, mode="reply", viewers=viewers)
+            except Exception as e:
+                print(f"Reply not sent (socket closed?): {e}")
+
+    def facts() -> dict:
+        return chat_facts(getattr(session, "last_move_name", ""), getattr(session, "last_stats", None),
+                          getattr(session, "last_summary", None))
+
+    if getattr(session, "chat", None) is None:
+        session.chat = CoachChat()   # sessions built without __init__ (tests)
+    session.orchestrator = VoiceOrchestrator(emit, speak, facts, chat=session.chat)
+    return session.orchestrator
+
+
 async def send_coach_cue(
     websocket: WebSocket,
     voice: Optional[VoiceCoach],
@@ -681,6 +715,7 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
     viewers = getattr(session, "viewers", None)
     if viewers is not None and viewers.count:
         await notify_viewer_count(session)   # a reconnecting phone learns who is watching
+    orchestrator = make_orchestrator(session, websocket, viewers)
 
     try:
         while True:
@@ -703,6 +738,8 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
 
                 # send frame data to frontend immediately
                 await _send_text(websocket, json.dumps(payload), viewers)
+                session.last_stats = payload.get("stats")
+                session.last_move_name = coach_ctx.get("move_name", "") or getattr(session, "last_move_name", "")
 
                 if viewers is not None and viewers.video_count:
                     now = time.monotonic()
@@ -722,8 +759,9 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                     continue
                 if debrief_reps:
                     # The result card first (shows even with no API key), then the spoken debrief.
-                    await _send_text(websocket, json.dumps(
-                        attempt_summary(coach_ctx.get("move_name", ""), debrief_reps)), viewers)
+                    summary = attempt_summary(coach_ctx.get("move_name", ""), debrief_reps)
+                    session.last_summary = summary
+                    await _send_text(websocket, json.dumps(summary), viewers)
                     # The dancer just stopped: one debrief for that attempt.
                     async def _fire_debrief(ctx=coach_ctx, reps=debrief_reps):
                         async with session.speak_lock:
@@ -748,6 +786,8 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                     fill_ratio=coach_ctx.get("fill_ratio", 0),
                     has_score=bool(coach_ctx.get("score_result")),
                 )
+                if fire and orchestrator.busy:
+                    fire = False   # the dancer is talking to the coach; no cue over it
                 if fire:
                     async def _fire_cue(ctx=coach_ctx):
                         async with session.speak_lock:
@@ -760,7 +800,7 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                                 clean_streak = ctx.get("clean_streak", 0),
                             )
                             # A demo may have started while the cue was being written.
-                            if cue and not session.ai_coach.held:
+                            if cue and not session.ai_coach.held and not orchestrator.busy:
                                 # caption + Kokoro audio, streamed to the client
                                 try:
                                     await send_coach_cue(websocket, session.voice, cue, viewers=viewers)
@@ -785,6 +825,12 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                 demo_msg, _line, quiet_s = demo
                 session.ai_coach.hold(quiet_s)
                 await _send_text(websocket, json.dumps(demo_msg), viewers)
+
+            elif msg.get("type") == "chat":
+                # A typed question. Answered off the receive loop so frames keep flowing.
+                text = msg.get("text")
+                if isinstance(text, str):
+                    _track(session, asyncio.create_task(orchestrator.handle_text(text, "text")))
 
             elif msg.get("type") == "live_cues":
                 session.ai_coach.live_cues = bool(msg.get("on"))
