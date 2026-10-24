@@ -9,7 +9,8 @@ import "../styles/viewer.css";
 // A big mirror for a TV or laptop (open /view). The phone stays the camera;
 // this page only shows what the backend sends: the dancer's skeleton flipped
 // like a mirror, the rep tallies, the joint to fix, and the coach's words in
-// large text. It never receives video.
+// large text. The camera picture is off until you tap SHOW CAMERA; it is a
+// small, low-quality copy of what the phone sends, shown live and never stored.
 export default function Viewer() {
   const [frame, setFrame] = useState({});
   const [stats, setStats] = useState(null);
@@ -19,6 +20,8 @@ export default function Viewer() {
   const [summary, setSummary] = useState(null);
   const repsNow = useRef(0);
   const [audioNote, setAudioNote] = useState(null);
+  const [showCamera, setShowCamera] = useState(false);
+  const [picture, setPicture] = useState(null);
   const cueTimer = useRef(null);
 
   const { unlocked, unlock, playChunk, setLatestTurn } = useCoachAudio();
@@ -35,6 +38,8 @@ export default function Viewer() {
       setLatestTurn(msg.turn_id);
       clearTimeout(cueTimer.current);
       cueTimer.current = setTimeout(() => setCue(""), 8000);
+    } else if (msg.type === "video") {
+      setPicture(`data:image/jpeg;base64,${msg.data}`);
     } else if (msg.type === "rep_summary") {
       setSummary({ ...msg, at: repsNow.current });
     } else if (msg.type === "demo_end") {
@@ -53,10 +58,10 @@ export default function Viewer() {
 
   // A different session means a different dancer run: drop the old pose, tallies and caption.
   const onSession = useCallback(() => {
-    setFrame({}); setStats(null); setCue(""); setDemo(null); setSummary(null); setAudioNote(null);
+    setFrame({}); setStats(null); setCue(""); setDemo(null); setSummary(null); setAudioNote(null); setPicture(null);
   }, []);
 
-  const status = useViewerSocket(onMessage, playChunk, onSession);
+  const status = useViewerSocket(onMessage, playChunk, onSession, showCamera);
   const closeDemo = useCallback(() => setDemo(null), []);
 
   // Sound needs a click or tap first on most browsers and TVs, so unlock on the
@@ -85,12 +90,16 @@ export default function Viewer() {
         <span className={`viewer-status ${status}`}>
           {status === "live" ? "LIVE" : "WAITING FOR THE PHONE"}
         </span>
+        <button className="viewer-sound" onClick={() => { setShowCamera((v) => !v); setPicture(null); }}>
+          {showCamera ? "HIDE CAMERA" : "SHOW CAMERA"}
+        </button>
         {!unlocked && <button className="viewer-sound" onClick={() => unlock().catch(() => {})}>CLICK FOR SOUND</button>}
       </div>
 
       <div className="viewer-main">
         <div className="viewer-stage">
-          <SkeletonCanvas {...frame} mirror />
+          {showCamera && picture && <img className="viewer-camera" src={picture} alt="" />}
+          <SkeletonCanvas {...frame} mirror clear={showCamera && !!picture} />
           <ResultCard summary={summary} big />
           <DemoOverlay key={demo?._n} demo={demo} onClose={closeDemo} />
         </div>

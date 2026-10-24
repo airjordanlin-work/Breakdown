@@ -186,3 +186,42 @@ def test_viewers_are_closed_when_the_phone_leaves():
             assert server._sessions["sess-gone"].viewers.count == 0
     finally:
         server._sessions.pop("sess-gone", None)
+
+
+def test_video_goes_only_to_viewers_that_opted_in():
+    async def go():
+        hub = ViewerHub()
+        a, b = FakeWS(), FakeWS()
+        hub.add(a)
+        hub.add(b)
+        assert hub.video_count == 0
+        hub.want_video(a, True)
+        await hub.broadcast_video("pic")
+        assert a.texts == ["pic"] and b.texts == []
+        hub.want_video(a, False)
+        await hub.broadcast_video("pic2")
+        assert a.texts == ["pic"]
+        hub.want_video(FakeWS(), True)   # not a viewer: ignored
+        assert hub.video_count == 0
+    asyncio.run(go())
+
+
+def test_discard_forgets_the_video_opt_in():
+    hub = ViewerHub()
+    a = FakeWS()
+    hub.add(a)
+    hub.want_video(a, True)
+    hub.discard(a)
+    assert hub.video_count == 0
+
+
+def test_make_preview_shrinks_a_frame_and_rejects_junk():
+    import base64
+    import cv2
+    import numpy as np
+    img = np.zeros((480, 640, 3), np.uint8)
+    ok, buf = cv2.imencode(".jpg", img)
+    small = server.make_preview(base64.b64encode(buf.tobytes()).decode())
+    out = cv2.imdecode(np.frombuffer(base64.b64decode(small), np.uint8), cv2.IMREAD_COLOR)
+    assert out.shape[1] == server.PREVIEW_WIDTH
+    assert server.make_preview("not an image") is None
