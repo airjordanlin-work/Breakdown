@@ -1,5 +1,6 @@
 // Hold to talk to the coach (push-to-talk). Press and hold, speak, let go.
-// Sliding off the button or the browser cancelling the touch drops the clip.
+// The pointer is captured, so letting go anywhere sends the clip. Only the
+// browser cancelling the touch (pointercancel, e.g. a system gesture) drops it.
 const LABELS = {
   idle: "HOLD TO TALK",
   listening: "LISTENING",

@@ -13,6 +13,8 @@ turn is in progress:
 Push-to-talk audio is kept in memory only until speech to text returns, then
 dropped (CLAUDE.md rule 7). A clip is cut at MAX_CLIP_S, and one that never
 gets a ``ptt_end`` is ended by a timer so the coach cannot get stuck listening.
+When the phone's socket closes, ``close()`` drops the clip, stops the timer
+and makes any turn still running skip its model call.
 
 The orchestrator does not know about WebSockets. The server passes in
 ``emit`` (send a JSON message to the phone and viewers), ``speak`` (caption
@@ -35,6 +37,7 @@ Emit = Callable[[dict], Awaitable[None]]
 Speak = Callable[[str], Awaitable[None]]
 Facts = Callable[[], dict]
 Transcribe = Callable[[bytes], Awaitable[Transcript]]
+SttStatus = Callable[[], str]   # "ready" | "loading" | "off"
 
 MAX_CHUNK_BYTES = 64_000     # one ptt_audio message; bigger ones are ignored
 LISTEN_GRACE_S  = 2.0        # after MAX_CLIP_S with no ptt_end, end the clip anyway
@@ -45,6 +48,7 @@ LINES = {
     "not_heard": "I didn't catch that. Say it again?",
     "stt_failed": "I couldn't hear that one. Try again, or type it.",
     "stt_off": "I can't hear yet on this setup. Type your question instead.",
+    "stt_loading": "Still getting my ears ready. Try again in a few seconds.",
 }
 
 
@@ -60,6 +64,7 @@ class VoiceOrchestrator:
         on_busy: Optional[Callable[[bool], None]] = None,
         transcribe: Optional[Transcribe] = None,
         stt_available: bool = False,
+        stt_status: Optional[SttStatus] = None,
     ) -> None:
         self._emit = emit
         self._speak = speak
@@ -67,8 +72,13 @@ class VoiceOrchestrator:
         self.chat = chat or CoachChat()
         self._on_busy = on_busy or (lambda busy: None)
         self._transcribe = transcribe
-        self.stt_available = stt_available and transcribe is not None
+        if transcribe is None:
+            self._stt_status: SttStatus = lambda: "off"
+        else:
+            self._stt_status = stt_status or (lambda: "ready" if stt_available else "off")
         self.state = "idle"
+        self.closed = False
+        self._tasks: set[asyncio.Task] = set()
         self.busy = False
         self.last_reply: Optional[Reply] = None
         self._clip: Optional[bytearray] = None
@@ -92,6 +102,8 @@ class VoiceOrchestrator:
 
     async def handle_text(self, text: str, source: str = "text") -> Optional[Reply]:
         """Answer one typed (or already transcribed) turn. None if another turn is running."""
+        if self.closed:
+            return None
         if not self._claim():
             await self._emit({"type": "voice_state", "state": self.state, "busy": True})
             return None
@@ -106,17 +118,26 @@ class VoiceOrchestrator:
     def listening(self) -> bool:
         return self._clip is not None
 
+    @property
+    def stt_available(self) -> bool:
+        return self._stt_status() != "off"
+
     async def ptt_start(self) -> bool:
-        """The dancer pressed the button. False if a turn is already running."""
+        """The dancer pressed the button. False if a turn is already running or STT is not ready.
+
+        Never waits on speech: a refusal line is spoken from a background task,
+        so the socket's receive loop keeps reading frames.
+        """
+        if self.closed:
+            return False
         if not self._claim():
             await self._emit({"type": "voice_state", "state": self.state, "busy": True})
             return False
-        if not self.stt_available:
-            try:
-                await self._set_state("speaking")
-                await self._speak(LINES["stt_off"])
-            finally:
-                await self._release()
+        status = self._stt_status()
+        if status != "ready":
+            # Tell the phone first, so it can stop the mic and (when off) show the typing box.
+            await self._emit({"type": "stt_status", "available": status != "off", "state": status})
+            self._spawn(self._say_then_release(LINES["stt_off" if status == "off" else "stt_loading"]))
             return False
         self._clip = bytearray()
         await self._set_state("listening")
@@ -128,6 +149,27 @@ class VoiceOrchestrator:
         if self.listening:
             print("Turn: push-to-talk clip never ended, ending it now")
             await self.ptt_end()
+
+    def _spawn(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _say_then_release(self, line: str) -> None:
+        try:
+            await self._say(line)
+        finally:
+            await self._release()
+
+    async def close(self) -> None:
+        """The phone's socket closed: drop any clip and stop turns from spending anything more."""
+        self.closed = True
+        clip = self._take_clip()
+        for task in list(self._tasks):
+            task.cancel()
+        if clip is not None and self.busy:
+            self.busy = False
+            self._on_busy(False)
 
     def ptt_audio(self, b64: str) -> None:
         """One chunk of 16 kHz mono PCM16, base64. Ignored unless listening."""
@@ -175,6 +217,8 @@ class VoiceOrchestrator:
             finally:
                 del pcm   # the audio is not kept past this point
             stt_ms = (time.perf_counter() - start) * 1000
+            if self.closed:
+                return None   # the phone left while we were listening; nobody to answer
             text = (heard.text or "").strip()
             if not text or (heard.confidence is not None and heard.confidence < MIN_CONFIDENCE):
                 print(f"Turn: input=voice answer=not_heard stt_ms={stt_ms:.0f}")
@@ -190,7 +234,9 @@ class VoiceOrchestrator:
 
     # ---- shared ------------------------------------------------------------
 
-    async def _answer(self, text: str, source: str, stt_ms: Optional[float] = None) -> Reply:
+    async def _answer(self, text: str, source: str, stt_ms: Optional[float] = None) -> Optional[Reply]:
+        if self.closed:
+            return None
         await self._emit({"type": "transcript", "text": text, "source": source})
         await self._set_state("thinking")
         reply = await self.chat.answer(text, self._facts())

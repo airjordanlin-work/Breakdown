@@ -161,8 +161,49 @@ def test_speech_to_text_failure_degrades_to_a_spoken_line():
 
 def test_without_speech_to_text_the_button_says_to_type():
     orch, sent, spoken, _ = make(available=False)
-    assert run(orch.ptt_start()) is False
+
+    async def go():
+        started = await orch.ptt_start()
+        await asyncio.sleep(0.01)   # the line is spoken off the receive loop
+        return started
+    assert run(go()) is False
     assert spoken == [LINES["stt_off"]] and not orch.busy
+    assert {"type": "stt_status", "available": False, "state": "off"} in sent
+
+
+def test_a_press_while_the_model_loads_says_so_without_waiting_for_it():
+    stt = FakeSTT()
+    stt.loading = True
+    orch, sent, spoken, _ = make(stt)
+    orch._stt_status = stt.status
+
+    async def go():
+        started = await orch.ptt_start()
+        heard_before_speaking = list(spoken)
+        await asyncio.sleep(0.01)
+        return started, heard_before_speaking
+    started, before = run(go())
+    assert started is False and before == []
+    assert spoken == [LINES["stt_loading"]] and stt.clips == [] and not orch.busy
+    assert {"type": "stt_status", "available": True, "state": "loading"} in sent
+
+    stt.loading = False   # status is read on every press, so it is never stale
+    assert run(orch.ptt_start()) is True
+
+
+def test_closing_drops_the_clip_and_skips_the_model():
+    orch, sent, spoken, stt = make(FakeSTT("talk to me about practice"))
+
+    async def go():
+        await orch.ptt_start()
+        orch.ptt_audio(b64(pcm(1.0)))
+        await orch.close()
+        late = await orch.ptt_end()
+        typed = await orch.handle_text("talk to me about practice")
+        return late, typed
+    assert run(go()) == (None, None)
+    assert stt.clips == [] and spoken == [] and not orch.busy and not orch.listening
+    assert orch._listen_timer is None
 
 
 def test_cancel_drops_the_clip_and_says_nothing():
@@ -237,6 +278,47 @@ def test_whisper_all_silence_gives_empty_text():
     assert out.text == "" and out.confidence is None
 
 
+def test_whisper_reports_loading_and_refuses_clips_meanwhile():
+    engine = WhisperSTT()
+    engine.available = True
+    engine._loading = True
+    assert engine.status() == "loading"
+    try:
+        engine.transcribe(pcm(1.0))
+        assert False, "should refuse while loading"
+    except RuntimeError as e:
+        assert "loading" in str(e)
+    engine._loading = False
+    engine.available = False
+    assert engine.status() == "off"
+
+
+def test_a_clip_queued_behind_a_stuck_one_fails_fast(monkeypatch):
+    import time as _time
+
+    class Stuck(FakeSTT):
+        def transcribe(self, pcm):
+            _time.sleep(0.3)
+            return super().transcribe(pcm)
+
+    monkeypatch.setattr(server, "get_stt", lambda: Stuck("how did I do"))
+    monkeypatch.setattr(server, "STT_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(server, "_stt_inflight", None)
+    session = make_session()
+
+    async def go():
+        orch = server.make_orchestrator(session, websocket=None, viewers=None)
+        first = asyncio.get_running_loop().time()
+        for _ in range(2):
+            await orch.ptt_start()
+            orch.ptt_audio(b64(pcm(1.0)))
+            await orch.ptt_end()
+        return asyncio.get_running_loop().time() - first, orch
+    took, orch = run(go())
+    assert took < 0.25   # the second clip did not wait for the first to finish
+    assert not orch.busy
+
+
 def test_whisper_unavailable_says_why():
     engine = NoSTT("speech to text is off")
     assert not engine.available
@@ -289,4 +371,4 @@ def test_socket_push_to_talk_round_trip(monkeypatch):
 def test_stt_status_endpoint(monkeypatch):
     monkeypatch.setattr(server, "get_stt", lambda: NoSTT("speech to text is off (STT_ENGINE=off)"))
     body = TestClient(app).get("/stt/status").json()
-    assert body == {"available": False, "reason": "speech to text is off (STT_ENGINE=off)"}
+    assert body == {"available": False, "state": "off", "reason": "speech to text is off (STT_ENGINE=off)"}

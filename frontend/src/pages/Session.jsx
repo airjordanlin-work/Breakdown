@@ -89,6 +89,7 @@ export default function Session({ sessionId, onEnd }) {
   const [sttOk, setSttOk] = useState(null);   // null until /stt/status answers
   const [micNote, setMicNote] = useState(null);
   const [holding, setHolding] = useState(false);
+  const dropTalkRef = useRef(null);   // set below, once the mic exists; read by handleMessage
   useEffect(() => {
     let alive = true;
     apiFetch("/stt/status")
@@ -130,7 +131,18 @@ export default function Session({ sessionId, onEnd }) {
       return;
     }
     if (msg.type === "voice_state") {
-      if (!msg.busy) setVoiceState(msg.state);
+      if (msg.busy) {
+        // The press was refused (the coach is still on the last turn): close the mic.
+        dropTalkRef.current?.("The coach is still answering. Try again in a moment.");
+      } else {
+        setVoiceState(msg.state);
+      }
+      return;
+    }
+    if (msg.type === "stt_status") {
+      // Read on every press, so a model that failed to load after page load shows the typing box.
+      setSttOk(Boolean(msg.available));
+      dropTalkRef.current?.(msg.state === "loading" ? "Speech to text is still loading." : null);
       return;
     }
     if (msg.type === "transcript") {
@@ -223,6 +235,16 @@ export default function Session({ sessionId, onEnd }) {
   const mic = useMicCapture(useCallback((b64) => { sendJson({ type: "ptt_audio", data: b64 }); }, [sendJson]));
   const holdingRef = useRef(false);
   const holdTimer = useRef(null);
+  // Stops a hold the server refused. No ptt_end: the server never started listening.
+  const dropTalk = useCallback((note) => {
+    if (note) setMicNote(note);
+    if (!holdingRef.current) return;
+    holdingRef.current = false;
+    setHolding(false);
+    clearTimeout(holdTimer.current);
+    mic.stop();
+  }, [mic]);
+  dropTalkRef.current = dropTalk;
   const endTalk = useCallback(() => {
     if (!holdingRef.current) return;
     holdingRef.current = false;
