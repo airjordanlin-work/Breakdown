@@ -372,3 +372,13 @@ def test_stt_status_endpoint(monkeypatch):
     monkeypatch.setattr(server, "get_stt", lambda: NoSTT("speech to text is off (STT_ENGINE=off)"))
     body = TestClient(app).get("/stt/status").json()
     assert body == {"available": False, "state": "off", "reason": "speech to text is off (STT_ENGINE=off)"}
+
+
+def test_a_closed_orchestrator_refuses_new_presses_and_typing():
+    orch, sent, spoken, stt = make()
+
+    async def go():
+        await orch.close()
+        return await orch.ptt_start(), await orch.handle_text("hello")
+    assert run(go()) == (False, None)
+    assert sent == [] and spoken == [] and stt.clips == [] and not orch.busy
