@@ -181,6 +181,15 @@ The app runs without either. Coaching and voice just switch off.
 
 Coach audio plays in the browser, not on the server. Browsers block sound until you tap the page, so if a session shows TAP FOR SOUND, tap it once.
 
+**Talking to the coach (EXISTS in code, not yet verified on a device).** Push-to-talk uses local speech to text (faster-whisper), so no audio leaves your machine and there is no per-turn cost:
+
+```bash
+cd backend
+python -m pip install -r requirements-voice.txt
+```
+
+The first session downloads the Whisper model (`base.en` by default, set `WHISPER_MODEL=tiny.en` in `.env` for a faster, less accurate one). Without it, push-to-talk says to type instead. Common questions ("how did I do", "what should I fix") are answered from the scores with no model call. Other questions go to Haiku under server-side limits set in `.env` (`CHAT_TURNS_PER_MIN`, `CHAT_TURNS_PER_SESSION`, `CHAT_DAILY_TOKENS`). How fast speech to text runs on a given machine has not been measured yet.
+
 ### Docker (backend only, PROPOSED: written but not yet built or run)
 
 The `Dockerfile` at the repo root builds the backend on Python 3.12. It was updated without a Docker daemon available, so the first build on your machine is the real test. From the repo root:
