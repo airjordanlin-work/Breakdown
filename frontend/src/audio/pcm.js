@@ -4,22 +4,38 @@
 
 export const TARGET_RATE = 16000;
 
-// Average-downsample float samples from inRate to 16 kHz. Averaging each
-// window is a crude low-pass, which is enough for speech to text.
-export function downsampleTo16k(input, inRate) {
-  if (inRate === TARGET_RATE) return Float32Array.from(input);
+// Average-downsample float samples to 16 kHz. Averaging each window is a
+// crude low-pass, which is enough for speech to text. Audio arrives one
+// chunk at a time, so window edges are kept in absolute sample positions:
+// a ratio like 44.1 kHz / 16 kHz = 2.75 then loses nothing at chunk
+// boundaries. Returns a function that takes the next chunk and gives back
+// the 16 kHz samples ready so far.
+export function createDownsampler(inRate) {
+  if (inRate === TARGET_RATE) return (input) => Float32Array.from(input);
   if (inRate < TARGET_RATE) throw new Error(`mic rate ${inRate} is below 16 kHz`);
   const ratio = inRate / TARGET_RATE;
-  const outLen = Math.floor(input.length / ratio);
-  const out = new Float32Array(outLen);
-  for (let i = 0; i < outLen; i++) {
-    const start = Math.floor(i * ratio);
-    const end = Math.min(input.length, Math.floor((i + 1) * ratio));
-    let sum = 0;
-    for (let j = start; j < end; j++) sum += input[j];
-    out[i] = end > start ? sum / (end - start) : 0;
-  }
-  return out;
+  let buf = new Float32Array(0);   // input not yet fully used
+  let base = 0;                    // absolute index of buf[0]
+  let made = 0;                    // output samples produced so far
+  return (input) => {
+    const joined = new Float32Array(buf.length + input.length);
+    joined.set(buf);
+    joined.set(input, buf.length);
+    const out = [];
+    for (;;) {
+      const start = Math.floor(made * ratio) - base;
+      const end = Math.floor((made + 1) * ratio) - base;
+      if (end > joined.length) break;
+      let sum = 0;
+      for (let j = start; j < end; j++) sum += joined[j];
+      out.push(end > start ? sum / (end - start) : 0);
+      made += 1;
+    }
+    const keepFrom = Math.floor(made * ratio) - base;
+    buf = joined.slice(keepFrom);
+    base += keepFrom;
+    return Float32Array.from(out);
+  };
 }
 
 // Float samples in [-1, 1] to little-endian 16-bit PCM bytes.

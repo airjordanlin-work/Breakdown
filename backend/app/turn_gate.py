@@ -3,9 +3,10 @@
 Every user turn passes through here before anything costs money. All limits
 are enforced on the server; the phone is never trusted to limit itself.
 
-- ``screen_text``: junk that never reaches the model (empty, one word with no
-  question in it, no letters, the same thing twice in a row).
-- ``TurnGate``: per-session turn rate and per-session cap.
+- ``screen_text``: junk that never reaches the model (empty, no letters).
+  Asking the same thing again about the same facts is answered from a cache
+  in ``chat.py`` rather than screened here, since the facts may have changed.
+- ``TurnGate``: per-session rate and cap on turns that would call the model.
 - ``TokenBudget``: a per-day token budget shared by every session in this
   process. It fails closed: once spent, only templated replies are sent until
   the day changes. It lives in memory, so a backend restart resets it.
@@ -44,27 +45,24 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower()).strip(" .,!?")
 
 
-def screen_text(text: str, previous: Optional[str] = None) -> Optional[str]:
+def screen_text(text: str) -> Optional[str]:
     """Why ``text`` should not become a turn, or None if it may.
 
-    Reasons: "empty", "no_words", "repeat".
+    Reasons: "empty", "no_words".
     """
     said = normalize(text)
     if not said:
         return "empty"
     if not _LETTER.search(said):
         return "no_words"
-    if previous is not None and said == normalize(previous):
-        return "repeat"
     return None
 
 
 class TurnGate:
-    """Per-session limits.
+    """Per-session limits on turns that would call the model.
 
-    Every turn counts toward the per-minute rate (even free ones, since each
-    reply is still spoken). Only turns that reach the model count toward the
-    per-session cap.
+    Free turns (quick answers, cache hits, limit lines) are not counted, so a
+    few "hi"s or "what's my streak"s never lock out a real question.
     """
 
     def __init__(
@@ -78,6 +76,20 @@ class TurnGate:
         self._clock = clock
         self._recent: deque[float] = deque()
         self.model_turns = 0
+
+    def admit(self) -> Optional[str]:
+        """Count one model turn, or say why not ("session_cap" or "rate").
+
+        A refused turn counts toward nothing, so asking again after a limit
+        line does not push the limit further away.
+        """
+        if self.model_turns >= self.per_session:
+            return "session_cap"
+        why = self.admit_turn()
+        if why:
+            return why
+        self.model_turns += 1
+        return None
 
     def admit_turn(self) -> Optional[str]:
         """Count one turn toward the rate, or return "rate" if the last minute is full."""
@@ -126,6 +138,22 @@ class TokenBudget:
         with self._lock:
             self._roll()
             self.spent += max(0, int(tokens))
+
+    def reserve(self, estimate: int) -> bool:
+        """Take ``estimate`` tokens now if they fit, so sessions asking at once cannot overshoot."""
+        estimate = max(0, int(estimate))
+        with self._lock:
+            self._roll()
+            if self.daily - self.spent < estimate:
+                return False
+            self.spent += estimate
+            return True
+
+    def settle(self, reserved: int, actual: int) -> None:
+        """Swap a reservation for what the call really used (may give tokens back)."""
+        with self._lock:
+            self._roll()
+            self.spent = max(0, self.spent - max(0, int(reserved)) + max(0, int(actual)))
 
 
 # One budget for the whole process: every session draws on the same day's tokens.

@@ -54,6 +54,13 @@ def test_facts_leave_out_replay_times_and_positions():
     assert "total_points" not in json.dumps(f)
 
 
+def test_an_attempt_card_from_another_move_is_left_out():
+    f = chat_facts("Six step", STATS, SUMMARY)
+    assert "last_attempt" not in f
+    assert "3 reps" not in summary_line(f)
+    assert "last_attempt" in chat_facts("Cross step", STATS, SUMMARY)
+
+
 def test_facts_with_nothing_scored_yet():
     f = chat_facts("", None, None)
     assert f["move"] == "this move" and f["session"]["reps"] == 0
@@ -67,10 +74,9 @@ def test_screen_drops_empty_and_wordless_text():
     assert screen_text("   ...  ") == "empty"
     assert screen_text("123 ???") == "no_words"
     assert screen_text("how was that") is None
-    assert screen_text("How was that?", "how was that") == "repeat"
 
 
-def test_rate_limit_counts_every_turn_in_the_last_minute():
+def test_rate_limit_counts_turns_in_the_last_minute():
     now = [0.0]
     gate = TurnGate(per_minute=2, per_session=10, clock=lambda: now[0])
     assert gate.admit_turn() is None
@@ -97,6 +103,15 @@ def test_budget_fails_closed_and_resets_next_day():
     assert budget.can_spend(1000)
 
 
+def test_budget_reservations_cannot_overshoot_and_settle_to_actual_use():
+    budget = TokenBudget(daily=1000)
+    assert budget.reserve(600)
+    assert not budget.reserve(600)      # a second session asking at the same moment
+    budget.settle(600, 350)
+    assert budget.spent == 350
+    assert budget.reserve(600)
+
+
 # ---- free answers ------------------------------------------------------------
 
 def test_hello_gets_a_reply_without_the_model():
@@ -114,6 +129,19 @@ def test_common_questions_are_answered_from_the_facts():
     assert "right knee" in quick_answer("what went well?", f)
     assert "2" in quick_answer("what's my streak", f)
     assert quick_answer("tell me about the history of breaking", f) is None
+
+
+def test_loose_words_do_not_hijack_real_questions():
+    f = facts()
+    assert quick_answer("can you help me understand why my elbow matters", f) is None
+    assert quick_answer("why do I need to fix my elbow", f) is None
+    assert quick_answer("show me how to fix my elbow", f) == quick_answer("show me", f)
+    assert quick_answer("help", f).startswith("Ask me")
+
+
+def test_two_questions_in_one_turn_get_both_answers():
+    both = quick_answer("was that good, what's my streak", facts())
+    assert "Clean streak is 2" in both and "3 reps, 2 clean" in both
 
 
 def test_free_answers_pass_the_grounding_guard():
@@ -210,9 +238,26 @@ def test_session_cap_stops_model_calls_but_free_answers_still_work():
 
 def test_rate_limit_answers_with_a_template():
     chat = CoachChat(llm=FakeLLM(), gate=TurnGate(per_minute=1), budget=TokenBudget(daily=10_000))
-    run(chat.answer("hi", facts()))
-    reply = run(chat.answer("what should I fix", facts()))
+    run(chat.answer("talk to me about practice", facts()))
+    reply = run(chat.answer("tell me something else about practice", facts()))
     assert reply.source == "limit" and reply.reason == "rate"
+
+
+def test_free_answers_do_not_use_up_the_rate_limit():
+    llm = FakeLLM()
+    chat = CoachChat(llm=llm, gate=TurnGate(per_minute=1), budget=TokenBudget(daily=10_000))
+    for q in ("hi", "what's my streak", "what should I fix", "how did I do", "thanks"):
+        assert run(chat.answer(q, facts())).source == "quick"
+    assert run(chat.answer("talk to me about practice", facts())).source == "model"
+
+
+def test_limit_replies_do_not_use_up_the_rate_limit():
+    now = [0.0]
+    chat = CoachChat(llm=FakeLLM(), gate=TurnGate(per_minute=2, per_session=1, clock=lambda: now[0]),
+                     budget=TokenBudget(daily=10_000))
+    assert run(chat.answer("talk to me about practice", facts())).source == "model"
+    for _ in range(3):
+        assert run(chat.answer("tell me something else about practice", facts())).reason == "session_cap"
 
 
 def test_long_typed_text_is_cut_before_the_model():
@@ -302,6 +347,19 @@ def test_socket_chat_hello_gets_a_spoken_reply():
         assert {"type": "voice_state", "state": "idle"} in msgs
     finally:
         server._sessions.pop("sess-chat", None)
+
+
+def test_closing_the_phone_socket_closes_its_turns():
+    session = make_session()
+    server._sessions["sess-chat3"] = session
+    try:
+        with TestClient(app).websocket_connect("/ws/sess-chat3") as ws:
+            ws.receive_text()
+            orch = session.orchestrator
+            assert not orch.closed
+        assert orch.closed
+    finally:
+        server._sessions.pop("sess-chat3", None)
 
 
 def test_socket_ignores_chat_without_text():
