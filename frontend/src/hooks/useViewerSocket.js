@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiFetch, wsUrl } from "../api";
 
 const RETRY_MS = 5000;
@@ -11,8 +11,17 @@ const FOLLOW_MS = 5000;
 // moves to a newer session when the phone starts one. onSession(id) runs when
 // the page joins a different session, so the page can clear the old one.
 // status is "searching" until the first message arrives, then "live".
-export function useViewerSocket(onMessage, onBinary, onSession) {
+// wantVideo asks the backend for small camera pictures (off by default).
+export function useViewerSocket(onMessage, onBinary, onSession, wantVideo = false) {
   const [status, setStatus] = useState("searching");
+  const wantVideoRef = useRef(wantVideo);
+  const sockRef = useRef(null);
+
+  useEffect(() => {
+    wantVideoRef.current = wantVideo;
+    const sock = sockRef.current;
+    if (sock && sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ type: "video", on: wantVideo }));
+  }, [wantVideo]);
 
   useEffect(() => {
     let stopped = false;
@@ -39,7 +48,11 @@ export function useViewerSocket(onMessage, onBinary, onSession) {
         await new Promise((resolve) => {
           const sock = new WebSocket(wsUrl(`/ws/${id}/view`));
           ws = sock;
+          sockRef.current = sock;
           sock.binaryType = "arraybuffer";
+          sock.onopen = () => {
+            if (wantVideoRef.current) sock.send(JSON.stringify({ type: "video", on: true }));
+          };
           const ping = setInterval(() => {
             if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ type: "ping" }));
           }, 15000);

@@ -39,3 +39,9 @@
   .viewer-main { flex-direction: column; }
   .viewer-side { width: auto; border-left: 0; border-top: 1px solid #1a1a1f; }
 }
+
+/* Camera picture under the skeleton; stretched to the same box as the skeleton canvas so the two line up. */
+.viewer-camera {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: fill; pointer-events: none;
+}
