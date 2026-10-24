@@ -8,6 +8,9 @@ backend/recordings/ so the numbers can be re-derived.
     python scripts/benchmark_pipeline.py pose --video clip.mp4
     python scripts/benchmark_pipeline.py pose --video clip.mp4 --with-dtw
     python scripts/benchmark_pipeline.py coach --n 5
+    python scripts/benchmark_pipeline.py stt --synth
+    python scripts/benchmark_pipeline.py stt --clips my_clips.csv --models tiny.en base.en
+    python scripts/benchmark_pipeline.py chat --n 3
     python scripts/benchmark_pipeline.py threshold --out-dir ../docs/benchmarks
     python scripts/benchmark_pipeline.py all --video clip.mp4
 
@@ -31,6 +34,17 @@ What each stage measures (and what it does not):
          scenarios, plus an automatic grounding check. The check is a rough
          heuristic. Fill in the manual_label column in the CSV by hand and
          report that rate, not the automatic one.
+  stt    Local speech to text (faster-whisper) time per clip, and word error
+         rate against the expected text. --synth speaks fixed coaching
+         questions with Kokoro, which is clean synthetic speech: its error
+         rate says nothing about a real voice over music. For that, record
+         your own clips (16-bit WAV, any rate) and pass --clips with a CSV of
+         path,text. Model load time is reported separately.
+  chat   Answers to the dancer's questions (app/chat.py) with real Haiku
+         calls: latency, tokens and cost per model turn, and how often the
+         grounding guard replaced the answer. Also reports how many of the
+         fixed sample questions were answered free (no model call); that
+         share depends on the sample list, not on real use.
 """
 
 from __future__ import annotations
@@ -362,6 +376,195 @@ def bench_coach(args: argparse.Namespace) -> None:
                         "auto_flags", "auto_flagged", "manual_label"], rows)
 
 
+# ------------------------------------------------------------------- stt
+
+def _words(text: str) -> list[str]:
+    return re.sub(r"[^a-z0-9' ]+", " ", text.lower()).split()
+
+
+def word_error_rate(reference: str, heard: str) -> float:
+    """Word-level edit distance divided by the reference length."""
+    ref, hyp = _words(reference), _words(heard)
+    if not ref:
+        return 0.0 if not hyp else 1.0
+    prev = list(range(len(hyp) + 1))
+    for i, r in enumerate(ref, 1):
+        cur = [i] + [0] * len(hyp)
+        for j, h in enumerate(hyp, 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (r != h))
+        prev = cur
+    return prev[-1] / len(ref)
+
+
+def wav_to_pcm16k(data: bytes) -> bytes:
+    """16-bit WAV bytes (any rate, mono or stereo) to 16 kHz mono PCM16, what the phone sends."""
+    import io
+    import wave
+
+    with wave.open(io.BytesIO(data)) as w:
+        if w.getsampwidth() != 2:
+            raise ValueError("only 16-bit WAV is supported")
+        rate, channels = w.getframerate(), w.getnchannels()
+        audio = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.float32)
+    if channels > 1:
+        audio = audio.reshape(-1, channels).mean(axis=1)
+    if rate != 16000:
+        n_out = int(len(audio) * 16000 / rate)
+        audio = np.interp(np.linspace(0, len(audio) - 1, n_out), np.arange(len(audio)), audio)
+    return np.clip(audio, -32768, 32767).astype("<i2").tobytes()
+
+
+STT_PHRASES = [
+    "how did I do",
+    "what should I fix",
+    "what went well",
+    "why does my left elbow matter",
+    "show me the cross step again",
+    "how many clean reps was that",
+    "is my right knee bent enough",
+    "what's my streak",
+]
+
+
+def _synth_clips() -> list[tuple[str, bytes]]:
+    from app.voice import VoiceCoach
+
+    voice = VoiceCoach()
+    if not voice.available:
+        sys.exit(f"Kokoro is not available ({getattr(voice, 'unavailable_reason', '')}); use --clips instead.")
+    clips = []
+    for text in STT_PHRASES:
+        wav = voice.synthesize_wav(text)
+        if wav:
+            clips.append((text, wav_to_pcm16k(wav)))
+    return clips
+
+
+def _file_clips(path: str) -> list[tuple[str, bytes]]:
+    base = Path(path).resolve().parent
+    clips = []
+    with open(path, newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            wav = (base / row["path"]).read_bytes()
+            clips.append((row["text"], wav_to_pcm16k(wav)))
+    return clips
+
+
+def bench_stt(args: argparse.Namespace) -> None:
+    from app.stt import BYTES_PER_S, WhisperSTT
+
+    if args.clips:
+        clips = _file_clips(args.clips)
+        kind = f"your clips ({args.clips})"
+    elif args.synth:
+        clips = _synth_clips()
+        kind = "Kokoro synthetic speech (clean, not a real voice)"
+    else:
+        sys.exit("Pass --synth or --clips path.csv (columns: path,text).")
+    print(f"\n[stt] {len(clips)} clips, {kind}")
+
+    rows: list[list] = []
+    for model in args.models:
+        engine = WhisperSTT(model=model)
+        if not engine.available:
+            sys.exit(engine.unavailable_reason)
+        t0 = time.perf_counter()
+        engine.warm_up()
+        if not engine.available:
+            sys.exit(engine.unavailable_reason)
+        load_s = time.perf_counter() - t0
+        print(f"{model}: model load {load_s:.1f} s (first run includes the download)")
+        times, rtf, errors = [], [], []
+        for rep in range(args.repeat):
+            for text, pcm in clips:
+                out = engine.transcribe(pcm)
+                secs = len(pcm) / BYTES_PER_S
+                wer = word_error_rate(text, out.text)
+                times.append(out.ms)
+                rtf.append(out.ms / 1000.0 / secs)
+                errors.append(wer)
+                rows.append([model, rep, f"{secs:.2f}", f"{out.ms:.1f}", f"{wer:.3f}",
+                             out.confidence if out.confidence is not None else "", text, out.text])
+        summarize(f"{model} time per clip", times)
+        print(f"{model}: time / clip length p50={pct(rtf, 50):.2f}  word error rate mean={np.mean(errors):.3f}")
+    write_csv("stt", ["model", "repeat", "clip_s", "stt_ms", "wer", "confidence", "expected", "heard"], rows,
+              Path(args.out_dir) if args.out_dir else OUT_DIR)
+
+
+# -------------------------------------------------------------------- chat
+
+CHAT_QUESTIONS = [
+    "hello",
+    "how did I do",
+    "what should I fix",
+    "what went well",
+    "why does a straight elbow matter for this move",
+    "can you explain what the cross step is supposed to look like",
+    "was my right shoulder okay",
+    "am I on beat",
+    "give me one thing to think about next round",
+    "what's the capital of France",
+]
+
+
+def _chat_facts() -> dict:
+    from app.chat import chat_facts
+
+    stats = {"reps": 6, "clean_reps": 4, "clean_streak": 2, "best_streak": 3,
+             "focus_joint": "left elbow", "focus_fix": "straighten"}
+    summary = {"reps": 3, "clean_reps": 2, "best_streak": 2, "went_well": ["right knee"],
+               "fix": {"joint": "left elbow", "fix": "straighten", "times_off": 1, "checkpoint": 2, "of": 4}}
+    return chat_facts("Cross step", stats, summary)
+
+
+def bench_chat(args: argparse.Namespace) -> None:
+    import asyncio
+
+    from app import chat as chat_mod
+    from app.turn_gate import TokenBudget, TurnGate
+
+    if not chat_mod.ANTHROPIC_API_KEY:
+        sys.exit("ANTHROPIC_API_KEY not set (add it to .env). Chat stage makes real API calls.")
+    facts = _chat_facts()
+    rows: list[list] = []
+    lat, t_in, t_out = [], [], []
+    sources: dict[str, int] = {}
+
+    async def run_all():
+        for rep in range(args.n):
+            # Fresh conversation per round so the cache and history do not hide calls.
+            convo = chat_mod.CoachChat(gate=TurnGate(per_minute=10_000, per_session=10_000),
+                                       budget=TokenBudget(daily=10_000_000))
+            for q in CHAT_QUESTIONS:
+                r = await convo.answer(q, facts)
+                sources[r.source] = sources.get(r.source, 0) + 1
+                if r.llm_ms is not None:
+                    lat.append(r.llm_ms)
+                if r.tokens_in or r.tokens_out:
+                    t_in.append(r.tokens_in)
+                    t_out.append(r.tokens_out)
+                rows.append([rep, q, r.source, r.reason or "", f"{r.llm_ms:.1f}" if r.llm_ms else "",
+                             r.tokens_in, r.tokens_out, r.text, ""])
+
+    print(f"\n[chat] model={chat_mod.MODEL}, {len(CHAT_QUESTIONS)} questions x {args.n} rounds")
+    asyncio.run(run_all())
+    total = len(CHAT_QUESTIONS) * args.n
+    free = sources.get("quick", 0)
+    print(f"answer sources: {sources}")
+    print(f"answered free (no model call): {free}/{total} of this fixed sample list")
+    if lat:
+        summarize("Haiku chat latency (API round trip)", lat)
+    if t_in:
+        per_turn = (np.mean(t_in) * PRICE_IN_PER_MTOK + np.mean(t_out) * PRICE_OUT_PER_MTOK) / 1_000_000
+        print(f"tokens per model turn: {np.mean(t_in):.0f} in / {np.mean(t_out):.1f} out  ->  ${per_turn:.5f} "
+              f"(assumes ${PRICE_IN_PER_MTOK}/${PRICE_OUT_PER_MTOK} per M tokens, verify pricing)")
+        print(f"if a 10-minute session has 10 model turns: ~${per_turn * 10:.4f}")
+    print(f"answers replaced by the guard or a length check: {sources.get('fallback', 0)}")
+    print("Next: read every model answer in the CSV and fill manual_label with grounded / ungrounded.")
+    write_csv("chat", ["round", "question", "source", "reason", "llm_ms", "in_tokens", "out_tokens",
+                       "answer", "manual_label"], rows, Path(args.out_dir) if args.out_dir else OUT_DIR)
+
+
 # ------------------------------------------------------------------- main
 
 def main() -> None:
@@ -377,6 +580,15 @@ def main() -> None:
     p_thr.add_argument("--out-dir", help="where to write the CSV (default backend/recordings)")
     p_coach = sub.add_parser("coach", help="time and check Claude Haiku cues (real API calls)")
     p_all = sub.add_parser("all", help="run every stage that has what it needs")
+    p_stt = sub.add_parser("stt", help="time local speech to text and its word error rate")
+    p_stt.add_argument("--synth", action="store_true", help="speak fixed questions with Kokoro")
+    p_stt.add_argument("--clips", help="CSV with columns path,text (16-bit WAV files)")
+    p_stt.add_argument("--models", nargs="+", default=["base.en"], help="whisper models to compare")
+    p_stt.add_argument("--repeat", type=int, default=3, help="passes over the clips")
+    p_stt.add_argument("--out-dir", help="where to write the CSV (default backend/recordings)")
+    p_chat = sub.add_parser("chat", help="time and check answers to the dancer's questions (real API calls)")
+    p_chat.add_argument("--n", type=int, default=3, help="rounds over the sample questions")
+    p_chat.add_argument("--out-dir", help="where to write the CSV (default backend/recordings)")
 
     for p in (p_dtw, p_all):
         p.add_argument("--n", type=int, default=200, help="DTW comparisons to time")
@@ -403,7 +615,7 @@ def main() -> None:
             print("\n[coach] skipped, no ANTHROPIC_API_KEY found")
         return
     {"dtw": bench_dtw, "pose": bench_pose, "coach": bench_coach,
-     "threshold": bench_threshold}[args.stage](args)
+     "threshold": bench_threshold, "stt": bench_stt, "chat": bench_chat}[args.stage](args)
 
 
 if __name__ == "__main__":

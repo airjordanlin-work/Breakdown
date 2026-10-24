@@ -29,6 +29,8 @@ pytest
 python scripts/benchmark_pipeline.py dtw
 python scripts/benchmark_pipeline.py coach --n 5
 python scripts/benchmark_pipeline.py pose --video <clip> --with-dtw
+python scripts/benchmark_pipeline.py stt --synth            # or --clips clips.csv (path,text)
+python scripts/benchmark_pipeline.py chat --n 3
 ```
 
 Use the project venv (`source .venv/bin/activate`) or `python3`.
