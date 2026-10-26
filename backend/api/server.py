@@ -120,6 +120,7 @@ _executor      = ThreadPoolExecutor(max_workers=4)
 # that arrives after the deadline is stale for a live cue.
 _tts_executor  = ThreadPoolExecutor(max_workers=2)
 _stt_executor  = ThreadPoolExecutor(max_workers=1)   # one clip at a time
+_stt_inflight: Optional[asyncio.Future] = None       # the clip the STT thread is working on
 TTS_TIMEOUT_SECONDS = 5.0
 
 # One shared IMU store for the whole server: there's one physical device.
@@ -559,13 +560,25 @@ def make_orchestrator(session: "CoachingSession", websocket: WebSocket,
     stt = get_stt()
 
     async def transcribe(pcm: bytes):
+        # A clip that timed out keeps the STT thread busy until Whisper returns; the next
+        # clip fails fast instead of queueing behind it and timing out too.
+        global _stt_inflight
+        if _stt_inflight is not None and not _stt_inflight.done():
+            raise RuntimeError("speech to text is still busy with an earlier clip")
         loop = asyncio.get_running_loop()
-        return await asyncio.wait_for(loop.run_in_executor(_stt_executor, stt.transcribe, pcm), STT_TIMEOUT_S)
+        _stt_inflight = loop.run_in_executor(_stt_executor, stt.transcribe, pcm)
+        return await asyncio.wait_for(asyncio.shield(_stt_inflight), STT_TIMEOUT_S)
+
+    def stt_status() -> str:
+        return stt.status() if hasattr(stt, "status") else ("ready" if stt.available else "off")
 
     if getattr(session, "chat", None) is None:
         session.chat = CoachChat()   # sessions built without __init__ (tests)
+    previous = getattr(session, "orchestrator", None)
+    if previous is not None:
+        asyncio.get_running_loop().create_task(previous.close())   # a reconnect replaces the old phone's turns
     session.orchestrator = VoiceOrchestrator(emit, speak, facts, chat=session.chat,
-                                             transcribe=transcribe, stt_available=stt.available)
+                                             transcribe=transcribe, stt_status=stt_status)
     return session.orchestrator
 
 
@@ -635,7 +648,9 @@ async def start_session(config: SessionConfig):
     _tts_executor.submit(warm_up_voice, session.voice)
     stt = get_stt()
     if stt.available and hasattr(stt, "warm_up"):
-        _stt_executor.submit(stt.warm_up)   # first use downloads and loads the model
+        # Its own thread, not the transcribe worker: a first-run download can take
+        # minutes, and clips must not queue behind it. stt.status() says "loading" meanwhile.
+        threading.Thread(target=stt.warm_up, name="stt-warm-up", daemon=True).start()
     return {"session_id": sid}
 
 
@@ -665,7 +680,8 @@ async def latest_session():
 async def stt_status():
     """Whether push-to-talk can hear on this backend, and why not."""
     stt = get_stt()
-    return {"available": stt.available, "reason": stt.unavailable_reason}
+    state = stt.status() if hasattr(stt, "status") else ("ready" if stt.available else "off")
+    return {"available": stt.available, "state": state, "reason": stt.unavailable_reason}
 
 
 @app.get("/imu/status")
@@ -758,7 +774,10 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                 # send frame data to frontend immediately
                 await _send_text(websocket, json.dumps(payload), viewers)
                 session.last_stats = payload.get("stats")
-                session.last_move_name = coach_ctx.get("move_name", "") or getattr(session, "last_move_name", "")
+                move_name = coach_ctx.get("move_name", "") or getattr(session, "last_move_name", "")
+                if move_name != getattr(session, "last_move_name", ""):
+                    session.last_summary = None   # that card was for another move
+                session.last_move_name = move_name
 
                 if viewers is not None and viewers.video_count:
                     now = time.monotonic()
@@ -787,8 +806,9 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                             text = await session.ai_coach.get_debrief(
                                 ctx.get("move_name", ""), reps, ctx.get("session_totals"),
                             )
-                            # A demo may have started while the debrief was being written.
-                            if text and not session.ai_coach.held:
+                            # A demo may have started while the debrief was being written, or the
+                            # dancer may be talking to the coach; the card already shows the result.
+                            if text and not session.ai_coach.held and not orchestrator.busy:
                                 try:
                                     await send_coach_cue(websocket, session.voice, text, mode="debrief", viewers=viewers)
                                 except Exception as e:
@@ -797,6 +817,10 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                     _track(session, asyncio.create_task(_fire_debrief()))
                     continue
 
+                if orchestrator.busy:
+                    # The dancer is talking to the coach: no cue over it, and the
+                    # cue gate is not asked, so its cooldown is not used up.
+                    continue
                 freeze_result = coach_ctx.get("freeze")
                 # Nothing is said while no body is tracked or the dancer is still.
                 fire = coach.can_fire_now() if freeze_result else coach.should_fire(
@@ -805,8 +829,6 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
                     fill_ratio=coach_ctx.get("fill_ratio", 0),
                     has_score=bool(coach_ctx.get("score_result")),
                 )
-                if fire and orchestrator.busy:
-                    fire = False   # the dancer is talking to the coach; no cue over it
                 if fire:
                     async def _fire_cue(ctx=coach_ctx):
                         async with session.speak_lock:
@@ -881,6 +903,8 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
     except WebSocketDisconnect:
         pass
     finally:
+        # Nobody is left to answer: drop any clip and skip model calls still pending.
+        await orchestrator.close()
         # The session is kept for reconnection, but a second screen should not
         # sit on a phone that is gone: closing it makes /view look for the next one.
         if session.controller is websocket:

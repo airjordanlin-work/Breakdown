@@ -3,13 +3,14 @@
 A user turn costs money only when it has to. In order:
 
 1. Junk (empty, no words) gets a templated "say that again".
-2. The per-session rate limit (``turn_gate.TurnGate``) is checked.
-3. The same question about the same facts gets the same answer again, free.
-4. Common questions ("hi", "how did I do", "what should I fix", "what went
+2. The same question about the same facts gets the same answer again, free.
+3. Common questions ("hi", "how did I do", "what should I fix", "what went
    well", "streak", "help", "thanks") are answered straight from the facts,
-   with no model call.
-5. Anything else goes to Claude Haiku, if the session cap and the daily token
-   budget allow it, with only the facts block and the last few turns.
+   with no model call. "Why" questions skip this and go to the model.
+4. Anything else goes to Claude Haiku, if the per-session rate and cap
+   (``turn_gate.TurnGate``) and the daily token budget allow it, with only the
+   facts block and the last few turns. The budget is reserved before the
+   call, so sessions asking at the same time cannot overshoot it.
 6. The model's answer must pass the grounding guard; if it fails, or the call
    fails or times out, a templated answer from the same facts is used.
 
@@ -77,6 +78,8 @@ def chat_facts(move_name: str, stats: Optional[dict], last_attempt: Optional[dic
     ``stats`` is the frame payload's stats dict; ``last_attempt`` is the latest
     rep_summary message. Replay positions and times are left out: they are
     not things to say, and their numbers would loosen the number check.
+    An attempt card from a different move is left out too, so its fix is
+    never reported under the new move's name.
     """
     stats = stats or {}
     facts: dict = {"move": move_name or "this move"}
@@ -85,6 +88,8 @@ def chat_facts(move_name: str, stats: Optional[dict], last_attempt: Optional[dic
     }
     if stats.get("focus_joint"):
         facts["focus"] = {"joint": stats["focus_joint"], "fix": stats.get("focus_fix") or "straighten"}
+    if last_attempt and move_name and last_attempt.get("move") not in (None, move_name):
+        last_attempt = None
     if last_attempt:
         fix = last_attempt.get("fix") or None
         if fix:
@@ -133,45 +138,61 @@ def summary_line(facts: dict) -> str:
 _INTENTS: list[tuple[str, re.Pattern]] = [
     ("greet",  re.compile(r"^(hi|hey|hello|yo|sup|hiya|what'?s up|good (morning|evening|afternoon))\b( (coach|there|man|bro))?$")),
     ("thanks", re.compile(r"^(thanks|thank you|thx|cheers|appreciate it)\b")),
-    ("help",   re.compile(r"\b(help|what can (you|i) (do|ask)|how does this work)\b")),
+    ("help",   re.compile(r"^(help( me)?|what can (you|i) (do|ask)( you)?|how does this work)$")),
+    ("demo",   re.compile(r"\b(show me|demo)\b")),
     ("well",   re.compile(r"\bwhat (went|did i do) (well|right|good)\b|\bwhat was good\b")),
-    ("fix",    re.compile(r"\b(what('?s| is) wrong|what (should|do|can) i (fix|work on|change|improve)|what to fix|what am i doing wrong|fix)\b")),
+    ("fix",    re.compile(r"\b(what('?s| is) wrong|what (should|do|can) i (fix|work on|change|improve)|what to fix|what am i doing wrong)\b|^fix\b")),
     ("streak", re.compile(r"\bstreak\b")),
     ("how",    re.compile(r"\b(how (did|was|'?d) (i|that|it)|how am i doing|how many|my score|score|how'?d i do|was that (good|clean))\b")),
-    ("demo",   re.compile(r"\b(show me|demo)\b")),
 ]
+QUICK_MAX_INTENTS = 2    # "was that good, what's my streak" gets both answers
+_WHY = re.compile(r"\b(why|explain)\b")
+
+
+def _intent_line(intent: str, facts: dict) -> str:
+    if intent == "greet":
+        s = facts.get("session") or {}
+        if s.get("reps"):
+            return f"Hey! {_plural(s['reps'], 'rep')} so far, {s['clean_reps']} clean. Ask me what to fix."
+        return "Hey! I'm watching. Do a few reps, stop, and ask me how it went."
+    if intent == "thanks":
+        return "Any time. Go again when you're ready."
+    if intent == "help":
+        return "Ask me how that went, what to fix, or what went well. I answer from what I measured."
+    if intent == "well":
+        went = (facts.get("last_attempt") or {}).get("went_well") or []
+        if went:
+            return f"Your {' and '.join(went[:3])} landed every rep. Nice."
+        return "Nothing landed every rep yet. " + (_fix_line(_the_fix(facts)) or "Do a full rep and I'll tell you.")
+    if intent == "fix":
+        return _fix_line(_the_fix(facts)) or "Nothing flagged yet. Do a full rep and I'll tell you."
+    if intent == "streak":
+        s = facts.get("session") or {}
+        return f"Clean streak is {s.get('clean_streak', 0)}, best is {s.get('best_streak', 0)}."
+    if intent == "how":
+        return summary_line(facts)
+    return "Tap SHOW ME and I'll play the move slowly."   # demo
 
 
 def quick_answer(text: str, facts: dict) -> Optional[str]:
-    """A reply straight from the facts for a common question, or None."""
+    """A reply straight from the facts for a common question, or None.
+
+    A "why" question is never a quick one: the canned line would not answer it.
+    """
     said = normalize(text)
-    for intent, pattern in _INTENTS:
-        if not pattern.search(said):
-            continue
-        if intent == "greet":
-            s = facts.get("session") or {}
-            if s.get("reps"):
-                return f"Hey! {_plural(s['reps'], 'rep')} so far, {s['clean_reps']} clean. Ask me what to fix."
-            return "Hey! I'm watching. Do a few reps, stop, and ask me how it went."
-        if intent == "thanks":
-            return "Any time. Go again when you're ready."
-        if intent == "help":
-            return "Ask me how that went, what to fix, or what went well. I answer from what I measured."
-        if intent == "well":
-            went = (facts.get("last_attempt") or {}).get("went_well") or []
-            if went:
-                return f"Your {' and '.join(went[:3])} landed every rep. Nice."
-            return "Nothing landed every rep yet. " + (_fix_line(_the_fix(facts)) or "Do a full rep and I'll tell you.")
-        if intent == "fix":
-            return _fix_line(_the_fix(facts)) or "Nothing flagged yet. Do a full rep and I'll tell you."
-        if intent == "streak":
-            s = facts.get("session") or {}
-            return f"Clean streak is {s.get('clean_streak', 0)}, best is {s.get('best_streak', 0)}."
-        if intent == "how":
-            return summary_line(facts)
-        if intent == "demo":
-            return "Tap SHOW ME and I'll play the move slowly."
-    return None
+    if _WHY.search(said):
+        return None
+    hits = [intent for intent, pattern in _INTENTS if pattern.search(said)]
+    if not hits:
+        return None
+    if "demo" in hits:
+        hits = ["demo"]   # "show me how to fix my elbow" is a demo request
+    lines: list[str] = []
+    for intent in hits[:QUICK_MAX_INTENTS]:
+        line = _intent_line(intent, facts)
+        if line not in lines:
+            lines.append(line)
+    return " ".join(lines)
 
 
 _LIMIT_LINES = {
@@ -231,12 +252,9 @@ class CoachChat:
 
     async def answer(self, text: str, facts: dict) -> Reply:
         text = (text or "")[:MAX_TEXT_CHARS]
-        if screen_text(text) is not None:
-            return Reply(_LIMIT_LINES["screen"], "screen", screen_text(text))
-
-        why = self.gate.admit_turn()
+        why = screen_text(text)
         if why:
-            return Reply(_LIMIT_LINES[why], "limit", why)
+            return Reply(_LIMIT_LINES["screen"], "screen", why)
 
         key = (normalize(text), json.dumps(facts, sort_keys=True))
         if self._last and self._last[:2] == key:
@@ -248,24 +266,23 @@ class CoachChat:
 
         if not self._available:
             return self._done(key, text, Reply(summary_line(facts), "fallback", "no_api_key"))
-        why = self.gate.admit_model()
+        why = self.gate.admit()
         if why:
             return Reply(_LIMIT_LINES[why], "limit", why)
 
         messages = self._messages(text, facts)
         estimate = _estimate_tokens(CHAT_SYSTEM_PROMPT, messages) + CHAT_MAX_TOKENS
-        if not self.budget.can_spend(estimate):
+        if not self.budget.reserve(estimate):
             return Reply(_LIMIT_LINES["daily_budget"] + summary_line(facts), "limit", "daily_budget")
 
         start = time.perf_counter()
         result = await self._llm(CHAT_SYSTEM_PROMPT, messages, CHAT_MAX_TOKENS, CHAT_TIMEOUT_S)
         ms = (time.perf_counter() - start) * 1000
         if result is None:
-            # A failed call may still have been billed; count the estimate to stay safe.
-            self.budget.spend(estimate)
+            # A failed call may still have been billed; the reservation stays spent to be safe.
             return self._done(key, text, Reply(summary_line(facts), "fallback", "llm_failed", llm_ms=ms))
         reply_text, t_in, t_out = result
-        self.budget.spend(t_in + t_out)
+        self.budget.settle(estimate, t_in + t_out)
         reply = Reply(reply_text.strip().strip('"').strip(), "model", tokens_in=t_in, tokens_out=t_out, llm_ms=ms)
         reason = self._reject(reply.text, facts)
         if reason:

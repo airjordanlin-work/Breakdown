@@ -13,9 +13,13 @@ Engines:
 - No engine: when faster-whisper is not installed or the model fails to load,
   ``available`` is False and push-to-talk says so instead of crashing.
 
+Every engine has ``status()``: "ready", "loading" (the model is still being
+downloaded or loaded, so a turn now would only wait) or "off". It is read on
+every press, so it never goes stale.
+
 Choose with ``STT_ENGINE`` (whisper | off) and ``WHISPER_MODEL`` in .env.
 How fast this is on a given machine is not known until
-``scripts/benchmark_pipeline.py voice`` is run there.
+``scripts/benchmark_pipeline.py stt`` is run there.
 """
 
 from __future__ import annotations
@@ -73,8 +77,12 @@ class FakeSTT:
     def __init__(self, text: str = "how did I do", confidence: float = 0.9, fail: bool = False) -> None:
         self.text, self.confidence, self.fail = text, confidence, fail
         self.available = True
+        self.loading = False
         self.unavailable_reason: Optional[str] = None
         self.clips: list[int] = []
+
+    def status(self) -> str:
+        return "off" if not self.available else "loading" if self.loading else "ready"
 
     def transcribe(self, pcm: bytes) -> Transcript:
         self.clips.append(len(pcm))
@@ -89,6 +97,9 @@ class NoSTT:
     def __init__(self, reason: str) -> None:
         self.unavailable_reason = reason
 
+    def status(self) -> str:
+        return "off"
+
     def transcribe(self, pcm: bytes) -> Transcript:
         raise RuntimeError(self.unavailable_reason)
 
@@ -100,6 +111,7 @@ class WhisperSTT:
         self.model_name, self.compute_type = model, compute_type
         self._model = None
         self._lock = threading.Lock()
+        self._loading = False
         self.available = True
         self.unavailable_reason: Optional[str] = None
         try:
@@ -116,10 +128,21 @@ class WhisperSTT:
             print(f"STT: loaded whisper {self.model_name} ({self.compute_type}) in {time.perf_counter() - start:.1f} s")
         return self._model
 
-    def warm_up(self) -> None:
-        """Load the model now (first use downloads it), so the first turn is not the slow one."""
+    def status(self) -> str:
         if not self.available:
+            return "off"
+        return "loading" if self._loading else "ready"
+
+    def warm_up(self) -> None:
+        """Load the model now (first use downloads it), so the first turn is not the slow one.
+
+        Run it on its own thread, not the transcribe worker: a download can take
+        longer than STT_TIMEOUT_S, and ``status()`` says "loading" meanwhile so
+        a press gets a spoken "still loading" instead of a timeout.
+        """
+        if not self.available or self._model is not None:
             return
+        self._loading = True
         try:
             with self._lock:
                 self._load()
@@ -127,10 +150,14 @@ class WhisperSTT:
             self.available = False
             self.unavailable_reason = f"whisper model failed to load: {e}"
             print(f"STT: {self.unavailable_reason}")
+        finally:
+            self._loading = False
 
     def transcribe(self, pcm: bytes) -> Transcript:
         if not self.available:
             raise RuntimeError(self.unavailable_reason)
+        if self._loading:
+            raise RuntimeError("whisper model is still loading")
         start = time.perf_counter()
         with self._lock:   # one clip at a time; the model is not shared across threads
             model = self._load()
