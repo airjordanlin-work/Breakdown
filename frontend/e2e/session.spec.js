@@ -37,14 +37,15 @@ test("top bar fits the phone screen", async ({ page }) => {
   await startSession(page);
 
   const vp = page.viewportSize();
-  const buttons = page.locator(".sess-top button");
-  const n = await buttons.count();
-  expect(n).toBeGreaterThanOrEqual(4);
-  for (let i = 0; i < n; i++) {
-    const box = await buttons.nth(i).boundingBox();
-    expect(box.x, `button ${i} left edge`).toBeGreaterThanOrEqual(0);
-    expect(box.x + box.width, `button ${i} right edge`).toBeLessThanOrEqual(vp.width);
-  }
+  // Read every button's position in one step: TAP FOR SOUND can disappear while we look.
+  const rects = await page.locator(".sess-top button").evaluateAll((els) =>
+    els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, right: r.right, w: r.width }; })
+      .filter((r) => r.w > 0));
+  expect(rects.length).toBeGreaterThanOrEqual(4);
+  rects.forEach((r, i) => {
+    expect(r.x, `button ${i} left edge`).toBeGreaterThanOrEqual(0);
+    expect(r.right, `button ${i} right edge`).toBeLessThanOrEqual(vp.width);
+  });
   // No sideways scrolling, and the bar leaves most of the screen for the camera.
   const scrollW = await page.evaluate(() => document.documentElement.scrollWidth);
   expect(scrollW).toBeLessThanOrEqual(vp.width);
@@ -109,7 +110,10 @@ test("coach voice off is shown", async ({ page }) => {
   await expect(page.getByText(/coach voice is off: kokoro model file missing/i)).toBeVisible();
 });
 
-test("hold to talk sends ptt_start then ptt_end", async ({ page }) => {
+test("hold to talk sends ptt_start then ptt_end", async ({ page, browserName }) => {
+  // WebKit has no fake microphone, so the mic fails to open and the page cancels the turn.
+  // Real iOS mic behavior is on the manual checklist.
+  test.skip(browserName === "webkit", "no fake mic in WebKit");
   await page.route("**/api/stt/status", (r) =>
     r.fulfill({ json: { available: true, state: "ready", reason: null } }));
   const coach = await fakeCoach(page);
