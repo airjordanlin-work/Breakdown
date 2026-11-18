@@ -33,3 +33,19 @@ def test_case_set_covers_both_labels_and_all_facts_blocks():
     labels = {c["grounded"] for c in data["cases"]}
     assert labels == {True, False}
     assert {c["facts"] for c in data["cases"]} <= set(data["facts"])
+
+
+def test_metrics_match_the_case_counts():
+    data = eval_guard.load()
+    m = eval_guard.metrics(data)
+    grounded = sum(1 for c in data["cases"] if c["grounded"])
+    assert m["tp"] + m["fn"] == len(data["cases"]) - grounded
+    assert m["fp"] + m["tn"] == grounded
+    assert 0.0 <= m["precision"] <= 1.0 and 0.0 <= m["recall"] <= 1.0
+    assert 0.0 <= m["false_refusal_rate"] <= 1.0
+    live, post = m["by_kind"]["live"], m["by_kind"]["post_rep"]
+    assert live[1] > 0 and post[1] > 0 and live[1] + post[1] == m["tp"] + m["fn"]
+
+
+def test_report_includes_the_rates():
+    assert "false-refusal rate" in eval_guard.report_offline(eval_guard.load())

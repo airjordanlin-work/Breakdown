@@ -1,8 +1,17 @@
-[guard eval] 44 hand-written cases: 17 grounded replies, 27 ungrounded replies
-  false refusals (grounded reply refused): 0 of 17
-  false accepts (ungrounded reply passed):  4 of 27
-  of those, marked known_gap: 4; unexpected: 0
+[guard eval] 74 hand-written cases: 30 grounded replies, 44 ungrounded replies
+  false refusals (grounded reply refused): 1 of 30
+  false accepts (ungrounded reply passed):  10 of 44
+  of those, marked known_gap: 11; unexpected: 0
   templated fallbacks that fail the guard: 0
+  precision 0.971, recall 0.773, false-refusal rate 0.033 (positive = ungrounded reply; TP 34, FP 1, FN 10, TN 29)
+  recall on live cues: 16 of 19; on post-rep debriefs: 18 of 25
+  - false_refusal [known gap] p12: 'Keep your head up and go again.' (figurative, no measurement claimed; the guard refuses 'your head') flags=["body part not in facts: 'head'"]
+  - false_accept [known gap] q11: 'That's your worst set yet' (comparison to earlier sets; the guard only knows a fixed list of comparison phrases) flags=[]
+  - false_accept [known gap] k06: 'Your knees are too close together' (a claim about both knees; only the right knee was measured) flags=[]
+  - false_accept [known gap] k07: 'Your last rep was the cleanest' (per-rep order is not in the facts) flags=[]
+  - false_accept [known gap] k08: 'Your hips twisted nicely on the second rep' (contradicts off_most and claims a per-rep result not in the facts) flags=[]
+  - false_accept [known gap] k09: 'Great energy out there' (energy is not measured) flags=[]
+  - false_accept [known gap] k10: 'That looked a little sloppy' (contradicts the clean rep; quality words are not checked against facts) flags=[]
   - false_accept [known gap] k02: 'That elbow keeps folding every rep' ('keeps' implies a pattern the facts do not show) flags=[]
   - false_accept [known gap] k03: 'Your form is excellent' (overall form rating is not measured) flags=[]
   - false_accept [known gap] k04: 'You're clearly fatigued, take a rest' (fatigue is not measured) flags=[]
