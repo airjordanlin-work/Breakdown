@@ -226,3 +226,7 @@ __marimo__/
 NOTES.md
 backend/voices-v1.0.bin
 backend/kokoro-v1.0.onnx
+
+# Playwright
+test-results/
+playwright-report/
