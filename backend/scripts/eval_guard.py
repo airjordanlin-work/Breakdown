@@ -55,6 +55,29 @@ def run_offline(data: dict) -> dict:
     return {"counts": counts, "mismatches": mismatches}
 
 
+def metrics(data: dict) -> dict:
+    """Precision, recall and false-refusal rate. Positive class = ungrounded (should be refused)."""
+    tp = fp = fn = tn = 0
+    by_kind: dict[str, list[int]] = {"live": [0, 0], "post_rep": [0, 0]}   # [caught, total ungrounded]
+    for c in data["cases"]:
+        facts = data["facts"][c["facts"]]
+        refused = bool(ungrounded_claims(c["text"], facts))
+        if c["grounded"]:
+            fp += refused
+            tn += not refused
+        else:
+            tp += refused
+            fn += not refused
+            kind = "post_rep" if "reps" in facts else "live"
+            by_kind[kind][0] += refused
+            by_kind[kind][1] += 1
+    def ratio(a, b):
+        return a / b if b else float("nan")
+    return {"tp": tp, "fp": fp, "fn": fn, "tn": tn,
+            "precision": ratio(tp, tp + fp), "recall": ratio(tp, tp + fn),
+            "false_refusal_rate": ratio(fp, fp + tn), "by_kind": by_kind}
+
+
 def fallback_failures(data: dict) -> list[str]:
     """Templated lines built from a facts block must pass the guard for that block."""
     from app.coach import fallback_debrief, fallback_cue
@@ -87,12 +110,17 @@ def report_offline(data: dict) -> str:
     fr = [m for m in mm if m["kind"] == "false_refusal"]
     unexpected = [m for m in mm if not m.get("known_gap")]
     fb = fallback_failures(data)
+    m = metrics(data)
     lines = [
         f"[guard eval] {len(data['cases'])} hand-written cases: {c['grounded']} grounded replies, {c['ungrounded']} ungrounded replies",
         f"  false refusals (grounded reply refused): {len(fr)} of {c['grounded']}",
         f"  false accepts (ungrounded reply passed):  {len(fa)} of {c['ungrounded']}",
         f"  of those, marked known_gap: {len([m for m in mm if m.get('known_gap')])}; unexpected: {len(unexpected)}",
         f"  templated fallbacks that fail the guard: {len(fb)}",
+        f"  precision {m['precision']:.3f}, recall {m['recall']:.3f}, false-refusal rate {m['false_refusal_rate']:.3f}"
+        f" (positive = ungrounded reply; TP {m['tp']}, FP {m['fp']}, FN {m['fn']}, TN {m['tn']})",
+        f"  recall on live cues: {m['by_kind']['live'][0]} of {m['by_kind']['live'][1]};"
+        f" on post-rep debriefs: {m['by_kind']['post_rep'][0]} of {m['by_kind']['post_rep'][1]}",
     ]
     for m in mm:
         tag = "known gap" if m.get("known_gap") else "UNEXPECTED"
