@@ -31,6 +31,7 @@ import httpx
 
 from app.coach import ANTHROPIC_API_KEY, ANTHROPIC_URL, FIX_PHRASES, MODEL
 from app.grounding import ungrounded_claims
+from app.knowledge import knowledge_block
 from app.turn_gate import DAILY_BUDGET, MAX_TEXT_CHARS, TokenBudget, TurnGate, normalize, screen_text
 
 CHAT_MAX_TOKENS = 120        # reply length cap sent to the model
@@ -306,9 +307,11 @@ class CoachChat:
         for q, a in self.history:
             messages.append({"role": "user", "content": q})
             messages.append({"role": "assistant", "content": a})
+        reference = knowledge_block(facts.get("move"))
         messages.append({
             "role": "user",
-            "content": "FACTS (measured this session):\n" + json.dumps(facts, indent=1) + "\n\nDancer: " + text,
+            "content": "FACTS (measured this session):\n" + json.dumps(facts, indent=1)
+            + ("\n\n" + reference if reference else "") + "\n\nDancer: " + text,
         })
         return messages
 

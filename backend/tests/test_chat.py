@@ -13,7 +13,7 @@ from app.chat import CoachChat, chat_facts, quick_answer, summary_line
 from app.coach import AICoach
 from app.grounding import ungrounded_claims
 from app.orchestrator import VoiceOrchestrator
-from app.turn_gate import TokenBudget, TurnGate, screen_text
+from app.turn_gate import MAX_TEXT_CHARS, TokenBudget, TurnGate, screen_text
 
 
 STATS = {"reps": 5, "clean_reps": 3, "clean_streak": 2, "best_streak": 2,
@@ -264,7 +264,8 @@ def test_long_typed_text_is_cut_before_the_model():
     llm = FakeLLM()
     chat = CoachChat(llm=llm, gate=TurnGate(), budget=TokenBudget(daily=100_000))
     run(chat.answer("explain " + "x" * 5000, facts()))
-    assert len(llm.calls[0][-1]["content"]) < 1500
+    # the cut text is capped; the move reference block is extra and not part of the typed text
+    assert "x" * (MAX_TEXT_CHARS + 1) not in llm.calls[0][-1]["content"]
 
 
 def test_without_an_api_key_open_questions_get_a_template():
