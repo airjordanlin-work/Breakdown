@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 
 from app.attempts import attempt_facts
 from app.grounding import ungrounded_claims
+from app.knowledge import knowledge_block
 
 load_dotenv()
 
@@ -314,6 +315,9 @@ def _build_debrief_prompt(facts: dict, recent: Sequence[str] = ()) -> str:
         "FACTS (measured on this attempt; clean means no joint missed its target):",
         json.dumps(facts, indent=1),
     ]
+    reference = knowledge_block(facts.get("move"))
+    if reference:
+        lines.append(reference)
     if recent:
         quoted = ", ".join(f'"{c}"' for c in recent)
         lines.append(f"Your recent lines, do not repeat them: {quoted}")
